@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/"
+title = "Budget by MyTools"
+version = "1.0.0"
+id = "artifacts/budget-mobile"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+name = "expo"
+paths = [ "/" ]
+localPort = 19496
+
+[services.development]
+run = "pnpm --filter @workspace/budget-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/budget-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/budget-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "19496"
+BASE_PATH = "/"
