@@ -14,6 +14,30 @@ function getBaseURL(): string {
   return process.env.EXPO_PUBLIC_API_URL || "https://mybudget.mytoolsgroup.eu";
 }
 
+// SecureStore is not available on web — fall back to localStorage
+async function storeToken(token: string): Promise<void> {
+  if (Platform.OS === "web") {
+    localStorage.setItem(TOKEN_KEY, token);
+  } else {
+    await SecureStore.setItemAsync(TOKEN_KEY, token);
+  }
+}
+
+async function retrieveToken(): Promise<string | null> {
+  if (Platform.OS === "web") {
+    return localStorage.getItem(TOKEN_KEY);
+  }
+  return SecureStore.getItemAsync(TOKEN_KEY);
+}
+
+async function removeToken(): Promise<void> {
+  if (Platform.OS === "web") {
+    localStorage.removeItem(TOKEN_KEY);
+  } else {
+    await SecureStore.deleteItemAsync(TOKEN_KEY);
+  }
+}
+
 const apiClient = axios.create({
   baseURL: getBaseURL(),
   timeout: 30000,
@@ -23,7 +47,7 @@ const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use(async (config) => {
-  const token = await SecureStore.getItemAsync(TOKEN_KEY);
+  const token = await retrieveToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -31,15 +55,15 @@ apiClient.interceptors.request.use(async (config) => {
 });
 
 export async function setAuthToken(token: string): Promise<void> {
-  await SecureStore.setItemAsync(TOKEN_KEY, token);
+  await storeToken(token);
 }
 
 export async function clearAuthToken(): Promise<void> {
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
+  await removeToken();
 }
 
 export async function getAuthToken(): Promise<string | null> {
-  return SecureStore.getItemAsync(TOKEN_KEY);
+  return retrieveToken();
 }
 
 export default apiClient;

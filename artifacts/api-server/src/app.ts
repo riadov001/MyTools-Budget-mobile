@@ -1,7 +1,6 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
-import { createProxyMiddleware } from "http-proxy-middleware";
 import router from "./routes";
 import { logger } from "./lib/logger";
 
@@ -42,25 +41,39 @@ app.use(express.urlencoded({ extended: true }));
 // Local routes (health check, etc.)
 app.use("/api", router);
 
-// Proxy everything else under /api to the external backend
-app.use(
-  "/api",
-  createProxyMiddleware({
-    target: EXTERNAL_API,
-    changeOrigin: true,
-    on: {
-      error: (err, _req, res) => {
-        logger.error({ err }, "Proxy error");
-        if (typeof (res as { headersSent?: boolean }).headersSent !== "undefined") {
-          const httpRes = res as import("http").ServerResponse;
-          if (!httpRes.headersSent) {
-            httpRes.writeHead(502);
-            httpRes.end("Proxy error");
-          }
-        }
-      },
-    },
-  }),
-);
+// Manual proxy: forward all unhandled /api/* requests to the external backend
+app.use("/api", async (req: Request, res: Response) => {
+  const targetUrl = `${EXTERNAL_API}/api${req.path}${req.url.includes("?") ? "?" + req.url.split("?")[1] : ""}`;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  const authHeader = req.headers["authorization"];
+  if (authHeader) headers["Authorization"] = authHeader;
+
+  try {
+    const body = ["GET", "HEAD"].includes(req.method.toUpperCase())
+      ? undefined
+      : JSON.stringify(req.body);
+
+    const upstream = await fetch(targetUrl, {
+      method: req.method,
+      headers,
+      body,
+    });
+
+    res.status(upstream.status);
+
+    const contentType = upstream.headers.get("content-type");
+    if (contentType) res.setHeader("Content-Type", contentType);
+
+    const text = await upstream.text();
+    res.send(text);
+  } catch (err) {
+    logger.error({ err, targetUrl }, "Proxy fetch error");
+    res.status(502).json({ error: "Proxy error" });
+  }
+});
 
 export default app;
