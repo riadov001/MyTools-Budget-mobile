@@ -42,10 +42,22 @@ export default function WelcomeScreen() {
     try {
       await loginWithEmail(email.trim(), password);
     } catch (error: unknown) {
-      const axiosError = error as { response?: { data?: { message?: string } } };
-      const message =
-        axiosError?.response?.data?.message ||
-        "Identifiants incorrects. Veuillez réessayer.";
+      const axiosError = error as {
+        response?: { data?: { message?: string }; status?: number };
+        message?: string;
+        code?: string;
+      };
+      let message = "Une erreur est survenue. Veuillez réessayer.";
+      if (axiosError?.response?.data?.message) {
+        message = axiosError.response.data.message;
+      } else if (axiosError?.code === "ERR_NETWORK" || axiosError?.message?.includes("Network")) {
+        message =
+          "Impossible de contacter le serveur. Vérifiez votre connexion internet ou testez avec l'app Expo Go sur votre téléphone (le navigateur web bloque parfois les requêtes externes).";
+      } else if (axiosError?.response?.status === 401) {
+        message = "Identifiants incorrects. Vérifiez votre email et mot de passe.";
+      } else if (axiosError?.response?.status === 400) {
+        message = "Requête invalide. Vérifiez le format de votre email et que votre mot de passe comporte au moins 6 caractères.";
+      }
       Alert.alert("Connexion échouée", message);
     } finally {
       setIsLoading(false);
