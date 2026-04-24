@@ -18,7 +18,11 @@
       "supportsTablet": false
     },
     "android": {
-      "package": "eu.mytoolsgroup.budget"
+      "package": "eu.mytoolsgroup.budget",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
@@ -48,6 +52,11 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "ca619b9f-651e-40c8-af25-7c225f087715"
+      }
     }
   }
 }
