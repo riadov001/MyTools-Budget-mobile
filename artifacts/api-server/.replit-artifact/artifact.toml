@@ -7,10 +7,11 @@ id = "3B4_FFSkEVBkAeYMFRJ2e"
 [[services]]
 localPort = 8080
 name = "API Server"
-# In dev, only /api is routed here (PWA dev server handles /budget-pwa/).
-# In production this is the SINGLE deployed service — Autoscale routes all
-# traffic to it, the API handles /api/* and the SPA fallback serves the PWA.
-paths = ["/api"]
+# Catch-all: in production this is the SINGLE service — it must receive every
+# request (the API handles /api/*, the SPA fallback serves the PWA for the rest).
+# In dev, the PWA workflow registers /budget-pwa/ which wins by longest-prefix
+# match, so this catch-all does not conflict with the PWA preview.
+paths = ["/"]
 
 [services.development]
 run = "pnpm --filter @workspace/api-server run dev"
@@ -18,8 +19,6 @@ run = "pnpm --filter @workspace/api-server run dev"
 [services.production]
 
 [services.production.build]
-# Builds the PWA + the api-server bundle and copies the PWA into dist/public.
-# This consolidates everything into a single Autoscale-friendly web service.
 args = ["node", "artifacts/api-server/scripts/build-prod.mjs"]
 
 [services.production.build.env]
