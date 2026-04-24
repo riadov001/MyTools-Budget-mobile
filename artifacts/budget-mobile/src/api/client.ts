@@ -4,14 +4,21 @@ import { Platform } from "react-native";
 
 const TOKEN_KEY = "auth_token";
 
-// On web (browser), requests go through the local Replit proxy to avoid CORS.
-// On native (Expo Go / device), requests go directly to the external API.
+// API base URL resolution:
+//   1. EXPO_PUBLIC_API_URL — set in eas.json profiles (dev/preview/production builds)
+//   2. EXPO_PUBLIC_DOMAIN — set automatically by Replit dev server (web preview only)
+//   3. Production fallback (custom domain)
 function getBaseURL(): string {
-  if (Platform.OS === "web") {
-    const domain = process.env.EXPO_PUBLIC_DOMAIN;
-    if (domain) return `https://${domain}`;
+  // Explicit override always wins (set in eas.json env per profile)
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return process.env.EXPO_PUBLIC_API_URL;
   }
-  return process.env.EXPO_PUBLIC_API_URL || "https://mybudget.mytoolsgroup.eu";
+  // Web preview inside Replit — use the proxied dev domain
+  if (Platform.OS === "web" && process.env.EXPO_PUBLIC_DOMAIN) {
+    return `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
+  }
+  // Production fallback
+  return "https://mybudget.mytoolsgroup.eu";
 }
 
 // SecureStore is not available on web — fall back to localStorage
