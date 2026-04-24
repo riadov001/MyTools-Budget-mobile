@@ -71,6 +71,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   await seedDatabase();
   await migrateUsers();
 
+  // ─── HEALTH ───────────────────────────────────────────────────────────────
+  app.get("/api/healthz", (_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
   // ─── AUTH ─────────────────────────────────────────────────────────────────
   app.post("/api/auth/login", async (req, res) => {
     try {
