@@ -100,6 +100,18 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      // swagger uses dynamic conditional requires that esbuild cannot resolve correctly
+      "swagger-jsdoc",
+      "swagger-ui-express",
+      "@apidevtools/*",
+      "@jsdevtools/*",
+      // pdfkit/fontkit/brotli load native or platform-specific modules dynamically
+      "pdfkit",
+      "fontkit",
+      "brotli",
+      // xlsx and mindee bundle a lot and have runtime require patterns
+      "xlsx",
+      "mindee",
     ],
     sourcemap: "linked",
     plugins: [

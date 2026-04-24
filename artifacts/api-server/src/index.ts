@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import cors from "cors";
 import { registerRoutes } from "./routes";
+import { serveStatic } from "./static";
 import { logger } from "./lib/logger";
 
 const rawPort = process.env["PORT"];
@@ -51,6 +52,12 @@ app.use((req, _res, next) => {
 
 (async () => {
   await registerRoutes(httpServer, app);
+
+  // In production, serve the built PWA from <dist>/public (added by build script).
+  // API routes are registered above and take precedence; everything else falls back to index.html.
+  if (process.env.NODE_ENV === "production") {
+    serveStatic(app);
+  }
 
   app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
     const e = err as { status?: number; statusCode?: number; message?: string };

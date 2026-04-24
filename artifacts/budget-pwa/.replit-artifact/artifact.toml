@@ -17,8 +17,5 @@ API_PORT = "8080"
 [services.development]
 run = "pnpm --filter @workspace/budget-pwa run dev"
 
-[services.production.build]
-args = ["pnpm", "--filter", "@workspace/budget-pwa", "run", "build"]
-
-[services.production.run]
-args = ["node", "artifacts/budget-pwa/server.js"]
+# No [services.production] block — in production, the PWA is bundled into
+# the api-server's dist/public/ and served by it as a single web service.

@@ -1,19 +1,48 @@
 import express, { type Express } from "express";
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-export function serveStatic(app: Express) {
-  const distPath = path.resolve(__dirname, "public");
+/**
+ * In production, serve the PWA's built static assets from `<distDir>/public`.
+ * - API routes (`/api/*`) MUST be registered before calling this so they take precedence.
+ * - All other paths fall back to `index.html` for client-side routing.
+ * - Hashed assets get a long cache; HTML never caches.
+ */
+export function serveStatic(app: Express): void {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const distPath = path.resolve(here, "public");
+
   if (!fs.existsSync(distPath)) {
-    throw new Error(
-      `Could not find the build directory: ${distPath}, make sure to build the client first`,
+    console.warn(
+      `[api-server] Static dir not found at ${distPath}; PWA will not be served.`,
     );
+    return;
   }
 
-  app.use(express.static(distPath));
+  const indexHtmlPath = path.join(distPath, "index.html");
+  if (!fs.existsSync(indexHtmlPath)) {
+    console.warn(`[api-server] ${indexHtmlPath} missing; PWA will not be served.`);
+    return;
+  }
 
-  // fall through to index.html if the file doesn't exist
-  app.use("/{*path}", (_req, res) => {
-    res.sendFile(path.resolve(distPath, "index.html"));
+  app.use(
+    express.static(distPath, {
+      index: false,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "no-cache");
+        } else if (/[/\\]assets[/\\]/.test(filePath)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    }),
+  );
+
+  // SPA fallback — only for non-API GET requests
+  app.get("/{*path}", (req, res, next) => {
+    if (req.path === "/api" || req.path.startsWith("/api/")) return next();
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(indexHtmlPath);
   });
 }

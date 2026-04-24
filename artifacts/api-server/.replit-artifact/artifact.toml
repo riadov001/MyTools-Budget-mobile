@@ -1,5 +1,5 @@
 kind = "api"
-previewPath = "/api" # TODO - should be excluded from preview in the first place
+previewPath = "/api"
 title = "API Server"
 version = "1.0.0"
 id = "3B4_FFSkEVBkAeYMFRJ2e"
@@ -7,6 +7,9 @@ id = "3B4_FFSkEVBkAeYMFRJ2e"
 [[services]]
 localPort = 8080
 name = "API Server"
+# In dev, only /api is routed here (PWA dev server handles /budget-pwa/).
+# In production this is the SINGLE deployed service — Autoscale routes all
+# traffic to it, the API handles /api/* and the SPA fallback serves the PWA.
 paths = ["/api"]
 
 [services.development]
@@ -15,13 +18,14 @@ run = "pnpm --filter @workspace/api-server run dev"
 [services.production]
 
 [services.production.build]
-args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
+# Builds the PWA + the api-server bundle and copies the PWA into dist/public.
+# This consolidates everything into a single Autoscale-friendly web service.
+args = ["node", "artifacts/api-server/scripts/build-prod.mjs"]
 
 [services.production.build.env]
 NODE_ENV = "production"
 
 [services.production.run]
-# we don't run through pnpm to make startup faster in production
 args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
 
 [services.production.run.env]

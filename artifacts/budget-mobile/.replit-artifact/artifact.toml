@@ -18,9 +18,8 @@ localPort = 19496
 [services.development]
 run = "pnpm --filter @workspace/budget-mobile run dev"
 
-[services.production]
-build = [ "pnpm", "--filter", "@workspace/budget-mobile", "run", "build" ]
-run = [ "pnpm", "--filter", "@workspace/budget-mobile", "run", "serve" ]
+# No [services.production] block — the mobile app is published via EAS Build
+# (App Store / Play Store), not via Replit Autoscale.
 
 [services.env]
 PORT = "19496"
