@@ -19,7 +19,7 @@ export function Register() {
     <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] px-4">
       <div className="w-full max-w-md">
         <div className="flex items-center justify-center gap-3 mb-8">
-          <img src="/logo.png" alt="Logo" className="w-10 h-10 object-contain" />
+          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="Logo" className="w-10 h-10 object-contain" />
           <div>
             <div className="text-white font-bold text-lg">MyTools</div>
             <div className="text-red-500 text-xs font-semibold tracking-widest">BUDGET TRACKER</div>

@@ -141,7 +141,7 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
       {/* Logo */}
       <div className="flex items-center justify-between px-5 py-6 flex-shrink-0" style={{ borderBottom: "1px solid hsl(0 0% 14%)" }}>
         <div className="flex items-center gap-3">
-          <img src="/logo.jpg" alt="Logo" className="w-10 h-10 rounded-lg flex-shrink-0 object-cover shadow-lg shadow-red-600/20" />
+          <img src={`${import.meta.env.BASE_URL}logo.jpg`} alt="Logo" className="w-10 h-10 rounded-lg flex-shrink-0 object-cover shadow-lg shadow-red-600/20" />
           <div className="min-w-0">
             <div className="text-white font-bold text-base leading-tight">Budget By</div>
             <div className="text-red-500 text-[10px] font-bold tracking-[0.2em] uppercase mt-0.5 opacity-80">MyTools</div>

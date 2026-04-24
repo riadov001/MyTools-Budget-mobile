@@ -22,7 +22,7 @@ export function Login() {
         <div className="absolute inset-0 bg-gradient-to-br from-red-900/20 via-transparent to-transparent pointer-events-none" />
         <div className="relative z-10">
           <div className="flex items-center gap-3">
-            <img src="/logo.jpg" alt="Logo" className="w-10 h-10 object-cover rounded-lg" />
+            <img src={`${import.meta.env.BASE_URL}logo.jpg`} alt="Logo" className="w-10 h-10 object-cover rounded-lg" />
             <div>
               <div className="text-white font-bold text-lg">Budget By</div>
               <div className="text-red-500 text-xs font-semibold tracking-widest">MYTOOLS</div>
@@ -58,7 +58,7 @@ export function Login() {
 
       <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-12">
         <div className="flex items-center gap-3 mb-8 lg:hidden">
-          <img src="/logo.jpg" alt="Logo" className="w-10 h-10 object-cover rounded-lg" />
+          <img src={`${import.meta.env.BASE_URL}logo.jpg`} alt="Logo" className="w-10 h-10 object-cover rounded-lg" />
           <div>
             <div className="text-white font-bold text-lg">Budget By</div>
             <div className="text-red-500 text-xs font-semibold tracking-widest">MYTOOLS</div>

@@ -120,6 +120,66 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch { res.status(400).json({ message: "Requête invalide" }); }
   });
 
+  // ─── CONSENT (RGPD / CGU) ─────────────────────────────────────────────────
+  app.post("/api/auth/consent", authenticate, async (req, res) => {
+    try {
+      const { cgu, privacy, cookies } = z.object({
+        cgu: z.boolean().optional(),
+        privacy: z.boolean().optional(),
+        cookies: z.boolean().optional(),
+      }).parse(req.body);
+      const now = new Date();
+      const updates: Record<string, Date | null> = {};
+      if (cgu === true) updates.consentCguAt = now;
+      if (privacy === true) updates.consentPrivacyAt = now;
+      if (cookies !== undefined) updates.consentCookiesAt = cookies ? now : null;
+      const u = await storage.updateUser(req.user!.id, updates as any);
+      const { password, ...without } = u;
+      res.json({ user: without });
+    } catch (err) {
+      res.status(400).json({ message: "Requête invalide" });
+    }
+  });
+
+  // ─── ACCOUNT DELETION ─────────────────────────────────────────────────────
+  app.delete("/api/auth/account", authenticate, async (req, res) => {
+    try {
+      await storage.updateUser(req.user!.id, {
+        email: `deleted_${req.user!.id}_${Date.now()}@deleted.local`,
+        password: "DELETED",
+        name: "Compte supprimé",
+      } as any);
+      res.json({ message: "Compte supprimé" });
+    } catch {
+      res.status(500).json({ message: "Erreur serveur" });
+    }
+  });
+
+  // ─── LEGAL TEXTS (CGU / Privacy / Mentions légales) ──────────────────────
+  app.get("/api/legal/cgu", (_req, res) => {
+    res.json({
+      title: "Conditions Générales d'Utilisation",
+      updatedAt: "2026-01-01",
+      content: `Bienvenue sur Budget by MyTools. En utilisant cette application, vous acceptez les présentes Conditions Générales d'Utilisation. L'application vous permet de gérer votre comptabilité, vos factures, vos dépenses et vos relations bancaires. Vous êtes seul responsable des données que vous saisissez et de leur exactitude.`,
+    });
+  });
+
+  app.get("/api/legal/privacy", (_req, res) => {
+    res.json({
+      title: "Politique de Confidentialité",
+      updatedAt: "2026-01-01",
+      content: `Vos données personnelles sont stockées de manière sécurisée et ne sont jamais revendues. Conformément au RGPD, vous disposez d'un droit d'accès, de rectification et de suppression de vos données. Pour exercer ces droits, contactez contact@mytools.fr.`,
+    });
+  });
+
+  app.get("/api/legal/mentions", (_req, res) => {
+    res.json({
+      title: "Mentions Légales",
+      updatedAt: "2026-01-01",
+      content: `Éditeur : MyTools — Application Budget by MyTools. Hébergement : Replit. Pour toute question juridique : contact@mytools.fr.`,
+    });
+  });
+
   // ─── FORGOT / RESET PASSWORD ──────────────────────────────────────────────
   app.post("/api/auth/forgot-password", ar(async (req, res) => {
     const { email } = z.object({ email: z.string().email() }).parse(req.body);

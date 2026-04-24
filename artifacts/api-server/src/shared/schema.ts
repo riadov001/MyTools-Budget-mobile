@@ -25,6 +25,9 @@ export const users = pgTable("users", {
   role: text("role").notNull().default("USER"), // SUPER_ADMIN | ADMIN | USER
   applicationId: integer("application_id").references(() => applications.id),
   language: text("language").notNull().default("fr"),
+  consentCguAt: timestamp("consent_cgu_at"),
+  consentPrivacyAt: timestamp("consent_privacy_at"),
+  consentCookiesAt: timestamp("consent_cookies_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

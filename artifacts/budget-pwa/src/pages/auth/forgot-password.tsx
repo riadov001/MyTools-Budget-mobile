@@ -36,7 +36,7 @@ export function ForgotPassword() {
     <div className="min-h-screen flex bg-[#0a0a0a] items-center justify-center p-6">
       <div className="w-full max-w-md">
         <div className="flex items-center gap-3 mb-8">
-          <img src="/logo.png" alt="Logo" className="w-9 h-9 object-contain" />
+          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="Logo" className="w-9 h-9 object-contain" />
           <div>
             <div className="text-white font-bold">MyTools</div>
             <div className="text-red-500 text-[10px] font-semibold tracking-widest">BUDGET TRACKER</div>
