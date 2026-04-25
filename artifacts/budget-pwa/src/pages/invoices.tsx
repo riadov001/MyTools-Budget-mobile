@@ -8,7 +8,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { encodeRecurrence, decodeRecurrence, computeNextOccurrenceClient } from "@/pages/expenses";
+
+const INVOICE_RECURRENCE_OPTIONS: Array<{ value: string; fr: string; en: string }> = [
+  { value: "monthly:1",   fr: "Tous les mois",       en: "Monthly" },
+  { value: "monthly:3",   fr: "Tous les 3 mois",     en: "Quarterly" },
+  { value: "monthly:6",   fr: "Tous les 6 mois",     en: "Every 6 months" },
+  { value: "yearly:1",    fr: "Tous les ans",        en: "Yearly" },
+  { value: "weekly:1",    fr: "Toutes les semaines", en: "Weekly" },
+];
 import { Plus, FileText, Edit, CheckCircle, Clock, AlertTriangle, XCircle, Send, Trash2, ScanLine } from "lucide-react";
 import { Link } from "wouter";
 import { ConfirmDelete } from "@/components/confirm-delete";
@@ -52,6 +62,9 @@ function InvoiceForm({ invoice, onClose }: { invoice?: Invoice; onClose: () => v
     currency: invoice?.currency ?? "EUR",
     dueDate: invoice?.dueDate ? format(new Date(invoice.dueDate), "yyyy-MM-dd") : format(new Date(Date.now() + 30 * 86400000), "yyyy-MM-dd"),
     notes: invoice?.notes ?? "",
+    isRecurring: invoice?.isRecurring ?? false,
+    recurrenceKey: encodeRecurrence(invoice?.recurrenceFrequency, invoice?.recurrenceInterval),
+    recurrenceEndDate: invoice?.recurrenceEndDate ? format(new Date(invoice.recurrenceEndDate), "yyyy-MM-dd") : "",
   });
   const [items, setItems] = useState<{ description: string; quantity: string; unitPrice: string }[]>(
     invoice ? [] : [{ description: "", quantity: "1", unitPrice: "0" }]
@@ -91,13 +104,24 @@ function InvoiceForm({ invoice, onClose }: { invoice?: Invoice; onClose: () => v
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const { isRecurring, recurrenceKey, recurrenceEndDate, ...rest } = form;
+    const decoded = decodeRecurrence(recurrenceKey);
+    const issued = new Date();
+    const nextOccurrence = isRecurring && decoded
+      ? computeNextOccurrenceClient(issued, decoded.frequency, decoded.interval).toISOString()
+      : null;
     mutation.mutate({
-      ...form,
+      ...rest,
       subtotal: subtotal.toFixed(2),
       taxAmount: taxAmount.toFixed(2),
       total: total.toFixed(2),
-      issuedDate: new Date().toISOString(),
-      dueDate: new Date(form.dueDate).toISOString(),
+      issuedDate: issued.toISOString(),
+      dueDate: new Date(rest.dueDate).toISOString(),
+      isRecurring,
+      recurrenceFrequency: isRecurring && decoded ? decoded.frequency : null,
+      recurrenceInterval: isRecurring && decoded ? decoded.interval : 1,
+      recurrenceEndDate: isRecurring && recurrenceEndDate ? new Date(recurrenceEndDate).toISOString() : null,
+      nextOccurrenceDate: nextOccurrence,
       items: items.map(i => ({
         description: i.description,
         quantity: i.quantity,
@@ -195,6 +219,39 @@ function InvoiceForm({ invoice, onClose }: { invoice?: Invoice; onClose: () => v
       <div>
         <label className="text-xs text-muted-foreground">{t("Notes", "Notes")}</label>
         <Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
+      </div>
+
+      {/* ─── Recurrence ──────────────────────────────────────────────────── */}
+      <div className="rounded-md border border-border/60 bg-muted/30 p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-semibold">{t("Facture récurrente", "Recurring invoice")}</div>
+            <div className="text-xs text-muted-foreground">{t("Émet automatiquement la prochaine facture", "Auto-emits the next invoice")}</div>
+          </div>
+          <Switch
+            checked={form.isRecurring}
+            onCheckedChange={v => setForm({ ...form, isRecurring: v, recurrenceKey: form.recurrenceKey || "monthly:1" })}
+          />
+        </div>
+        {form.isRecurring && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-muted-foreground">{t("Fréquence", "Frequency")}</label>
+              <Select value={form.recurrenceKey || "monthly:1"} onValueChange={v => setForm({ ...form, recurrenceKey: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {INVOICE_RECURRENCE_OPTIONS.map(o => (
+                    <SelectItem key={o.value} value={o.value}>{t(o.fr, o.en)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">{t("Fin (optionnel)", "End (optional)")}</label>
+              <Input type="date" value={form.recurrenceEndDate} onChange={e => setForm({ ...form, recurrenceEndDate: e.target.value })} />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2 justify-end pt-2">

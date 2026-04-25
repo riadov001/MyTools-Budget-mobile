@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Edit, Receipt, CheckCircle, Clock, AlertTriangle, FileText, ScanLine, Tag, X } from "lucide-react";
 import { Link } from "wouter";
@@ -102,6 +103,10 @@ function ExpenseForm({ expense, onClose, categories, initialOcr }: { expense?: E
       initialOcr?.lineItems?.length ? `Lignes: ${initialOcr.lineItems.map((li: any) => `${li.description} (${li.total?.toFixed(2)}€)`).join(", ")}` : "",
       initialOcr?.aiNotes || "",
     ].filter(Boolean).join(" | ") || ""),
+    isRecurring: expense?.isRecurring ?? false,
+    // Single key encoding "frequency:interval" for the simple selector
+    recurrenceKey: encodeRecurrence(expense?.recurrenceFrequency, expense?.recurrenceInterval),
+    recurrenceEndDate: expense?.recurrenceEndDate ? format(new Date(expense.recurrenceEndDate), "yyyy-MM-dd") : "",
   });
 
   const mutation = useMutation({
@@ -122,14 +127,25 @@ function ExpenseForm({ expense, onClose, categories, initialOcr }: { expense?: E
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const { isRecurring, recurrenceKey, recurrenceEndDate, ...rest } = form;
+    const decoded = decodeRecurrence(recurrenceKey);
+    const baseDate = new Date(rest.date);
+    const nextOccurrence = isRecurring && decoded
+      ? computeNextOccurrenceClient(baseDate, decoded.frequency, decoded.interval).toISOString()
+      : null;
     mutation.mutate({
-      ...form,
+      ...rest,
       amount: ht.toFixed(2),
       taxAmount: tva.toFixed(2),
       total: (ht + tva).toFixed(2),
-      date: new Date(form.date).toISOString(),
-      dueDate: form.dueDate ? new Date(form.dueDate).toISOString() : null,
-      paymentMethod: form.status === "paid" ? form.paymentMethod : form.paymentMethod || null,
+      date: baseDate.toISOString(),
+      dueDate: rest.dueDate ? new Date(rest.dueDate).toISOString() : null,
+      paymentMethod: rest.status === "paid" ? rest.paymentMethod : rest.paymentMethod || null,
+      isRecurring,
+      recurrenceFrequency: isRecurring && decoded ? decoded.frequency : null,
+      recurrenceInterval: isRecurring && decoded ? decoded.interval : 1,
+      recurrenceEndDate: isRecurring && recurrenceEndDate ? new Date(recurrenceEndDate).toISOString() : null,
+      nextOccurrenceDate: nextOccurrence,
     });
   };
 
@@ -209,6 +225,40 @@ function ExpenseForm({ expense, onClose, categories, initialOcr }: { expense?: E
         <Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} data-testid="input-expense-notes" />
       </div>
 
+      {/* ─── Recurrence ──────────────────────────────────────────────────── */}
+      <div className="rounded-md border border-border/60 bg-muted/30 p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-semibold">{t("Dépense récurrente", "Recurring expense")}</div>
+            <div className="text-xs text-muted-foreground">{t("Génère automatiquement les prochaines occurrences", "Auto-generates future occurrences")}</div>
+          </div>
+          <Switch
+            checked={form.isRecurring}
+            onCheckedChange={v => setForm({ ...form, isRecurring: v, recurrenceKey: form.recurrenceKey || "monthly:1" })}
+            data-testid="switch-expense-recurring"
+          />
+        </div>
+        {form.isRecurring && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-muted-foreground">{t("Fréquence", "Frequency")}</label>
+              <Select value={form.recurrenceKey || "monthly:1"} onValueChange={v => setForm({ ...form, recurrenceKey: v })}>
+                <SelectTrigger data-testid="select-expense-frequency"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {RECURRENCE_OPTIONS.map(o => (
+                    <SelectItem key={o.value} value={o.value}>{t(o.fr, o.en)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">{t("Fin (optionnel)", "End (optional)")}</label>
+              <Input type="date" value={form.recurrenceEndDate} onChange={e => setForm({ ...form, recurrenceEndDate: e.target.value })} data-testid="input-expense-recurrence-end" />
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="flex gap-2 justify-end pt-1">
         <Button type="button" variant="outline" onClick={onClose}>{t("Annuler", "Cancel")}</Button>
         <Button type="submit" disabled={mutation.isPending} className="bg-primary hover:bg-primary/90" data-testid="button-save-expense">
@@ -217,6 +267,42 @@ function ExpenseForm({ expense, onClose, categories, initialOcr }: { expense?: E
       </div>
     </form>
   );
+}
+
+// ─── Recurrence helpers (shared between expense + invoice forms) ─────────────
+const RECURRENCE_OPTIONS: Array<{ value: string; fr: string; en: string }> = [
+  { value: "daily:1",     fr: "Tous les jours",      en: "Daily" },
+  { value: "weekly:1",    fr: "Toutes les semaines", en: "Weekly" },
+  { value: "weekly:2",    fr: "Toutes les 2 semaines", en: "Every 2 weeks" },
+  { value: "monthly:1",   fr: "Tous les mois",       en: "Monthly" },
+  { value: "monthly:3",   fr: "Tous les 3 mois",     en: "Quarterly" },
+  { value: "monthly:6",   fr: "Tous les 6 mois",     en: "Every 6 months" },
+  { value: "yearly:1",    fr: "Tous les ans",        en: "Yearly" },
+];
+
+export function encodeRecurrence(frequency?: string | null, interval?: number | null): string {
+  if (!frequency) return "monthly:1";
+  return `${frequency}:${interval || 1}`;
+}
+
+export function decodeRecurrence(key: string): { frequency: string; interval: number } | null {
+  if (!key) return null;
+  const [frequency, intervalStr] = key.split(":");
+  const interval = parseInt(intervalStr, 10) || 1;
+  if (!["daily", "weekly", "monthly", "yearly"].includes(frequency)) return null;
+  return { frequency, interval };
+}
+
+export function computeNextOccurrenceClient(from: Date, frequency: string, interval: number): Date {
+  const next = new Date(from);
+  const i = Math.max(1, interval);
+  switch (frequency) {
+    case "daily":   next.setDate(next.getDate() + i); break;
+    case "weekly":  next.setDate(next.getDate() + 7 * i); break;
+    case "monthly": next.setMonth(next.getMonth() + i); break;
+    case "yearly":  next.setFullYear(next.getFullYear() + i); break;
+  }
+  return next;
 }
 
 export function Expenses() {

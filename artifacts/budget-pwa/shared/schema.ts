@@ -85,6 +85,13 @@ export const invoices = pgTable("invoices", {
   paidDate: timestamp("paid_date"),
   notes: text("notes"),
   applicationId: integer("application_id").references(() => applications.id),
+  // ─── Recurrence ──────────────────────────────────────────────────────────
+  isRecurring: boolean("is_recurring").notNull().default(false),
+  recurrenceFrequency: text("recurrence_frequency"), // daily | weekly | monthly | yearly
+  recurrenceInterval: integer("recurrence_interval").notNull().default(1),
+  recurrenceEndDate: timestamp("recurrence_end_date"),
+  recurrenceParentId: integer("recurrence_parent_id"),
+  nextOccurrenceDate: timestamp("next_occurrence_date"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -169,6 +176,13 @@ export const expenses = pgTable("expenses", {
   attachmentPath: text("attachment_path"),
   attachmentName: text("attachment_name"),
   notes: text("notes"),
+  // ─── Recurrence ──────────────────────────────────────────────────────────
+  isRecurring: boolean("is_recurring").notNull().default(false),
+  recurrenceFrequency: text("recurrence_frequency"), // daily | weekly | monthly | yearly
+  recurrenceInterval: integer("recurrence_interval").notNull().default(1),
+  recurrenceEndDate: timestamp("recurrence_end_date"),
+  recurrenceParentId: integer("recurrence_parent_id"),
+  nextOccurrenceDate: timestamp("next_occurrence_date"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -400,6 +414,8 @@ export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true,
   issuedDate: z.coerce.date(),
   dueDate: z.coerce.date(),
   paidDate: z.coerce.date().optional().nullable(),
+  recurrenceEndDate: z.coerce.date().optional().nullable(),
+  nextOccurrenceDate: z.coerce.date().optional().nullable(),
 });
 export const insertInvoiceItemSchema = createInsertSchema(invoiceItems).omit({ id: true });
 export const insertSupplierInvoiceSchema = createInsertSchema(supplierInvoices).omit({ id: true, createdAt: true }).extend({
@@ -413,6 +429,8 @@ export const insertCreditNoteSchema = createInsertSchema(creditNotes).omit({ id:
 export const insertExpenseSchema = createInsertSchema(expenses).omit({ id: true, createdAt: true }).extend({
   date: z.coerce.date(),
   dueDate: z.coerce.date().optional().nullable(),
+  recurrenceEndDate: z.coerce.date().optional().nullable(),
+  nextOccurrenceDate: z.coerce.date().optional().nullable(),
 });
 export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true }).extend({
   date: z.coerce.date(),

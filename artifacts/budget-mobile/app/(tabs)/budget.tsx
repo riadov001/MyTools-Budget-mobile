@@ -7,6 +7,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -52,6 +53,8 @@ export default function BudgetScreen() {
   const [newDate, setNewDate] = useState(
     format(new Date(), "yyyy-MM-dd")
   );
+  const [newIsRecurring, setNewIsRecurring] = useState(false);
+  const [newRecurrenceKey, setNewRecurrenceKey] = useState("monthly:1");
 
   const { data: expenses, isLoading } = useQuery<Expense[]>({
     queryKey: ["expenses"],
@@ -74,12 +77,7 @@ export default function BudgetScreen() {
   });
 
   const addMutation = useMutation({
-    mutationFn: async (data: {
-      description: string;
-      amount: number;
-      category: string;
-      date: string;
-    }) => {
+    mutationFn: async (data: Record<string, unknown>) => {
       await apiClient.post("/api/expenses", data);
     },
     onSuccess: () => {
@@ -89,11 +87,32 @@ export default function BudgetScreen() {
       setNewAmount("");
       setNewCategory("Autre");
       setNewDate(format(new Date(), "yyyy-MM-dd"));
+      setNewIsRecurring(false);
+      setNewRecurrenceKey("monthly:1");
     },
     onError: () => {
       Alert.alert("Erreur", "Impossible d'ajouter la dépense. Réessayez.");
     },
   });
+
+  const RECURRENCE_OPTIONS_M: Array<{ value: string; label: string }> = [
+    { value: "weekly:1",  label: "Chaque semaine" },
+    { value: "monthly:1", label: "Chaque mois" },
+    { value: "monthly:3", label: "Tous les 3 mois" },
+    { value: "monthly:6", label: "Tous les 6 mois" },
+    { value: "yearly:1",  label: "Chaque année" },
+  ];
+
+  const computeNext = (from: Date, key: string): Date => {
+    const [freq, intStr] = key.split(":");
+    const i = Math.max(1, parseInt(intStr, 10) || 1);
+    const d = new Date(from);
+    if (freq === "weekly")  d.setDate(d.getDate() + 7 * i);
+    else if (freq === "monthly") d.setMonth(d.getMonth() + i);
+    else if (freq === "yearly")  d.setFullYear(d.getFullYear() + i);
+    else d.setDate(d.getDate() + i);
+    return d;
+  };
 
   const handleDelete = (expense: Expense) => {
     Alert.alert(
@@ -120,11 +139,23 @@ export default function BudgetScreen() {
       Alert.alert("Erreur", "Veuillez saisir un montant valide.");
       return;
     }
+    const baseDate = new Date(newDate);
+    const [freq, intStr] = newRecurrenceKey.split(":");
+    const interval = Math.max(1, parseInt(intStr, 10) || 1);
     addMutation.mutate({
       description: newDesc.trim(),
-      amount,
+      amount: amount.toFixed(2),
+      total: amount.toFixed(2),
+      taxAmount: "0",
       category: newCategory,
-      date: newDate,
+      date: baseDate.toISOString(),
+      isRecurring: newIsRecurring,
+      recurrenceFrequency: newIsRecurring ? freq : null,
+      recurrenceInterval: newIsRecurring ? interval : 1,
+      recurrenceEndDate: null,
+      nextOccurrenceDate: newIsRecurring
+        ? computeNext(baseDate, newRecurrenceKey).toISOString()
+        : null,
     });
   };
 
@@ -322,6 +353,24 @@ export default function BudgetScreen() {
     catPillTextActive: {
       color: "#FFFFFF",
     },
+    recurrenceRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      marginTop: 16,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 12,
+      backgroundColor: colors.elevated,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    recurrenceHint: {
+      fontSize: 11,
+      fontFamily: "Exo2_400Regular",
+      color: colors.textMuted,
+      marginTop: 2,
+    },
     submitBtn: {
       backgroundColor: colors.primary,
       borderRadius: 12,
@@ -498,6 +547,49 @@ export default function BudgetScreen() {
                 onChangeText={setNewDate}
                 keyboardType="numbers-and-punctuation"
               />
+
+              {/* ─── Récurrence ─────────────────────────────────────────── */}
+              <View style={styles.recurrenceRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modalLabel}>Dépense récurrente</Text>
+                  <Text style={styles.recurrenceHint}>
+                    Génère automatiquement les prochaines occurrences
+                  </Text>
+                </View>
+                <Switch
+                  value={newIsRecurring}
+                  onValueChange={setNewIsRecurring}
+                  trackColor={{ false: colors.border, true: colors.primary }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+
+              {newIsRecurring && (
+                <>
+                  <Text style={styles.modalLabel}>Fréquence</Text>
+                  <View style={styles.categoryRow}>
+                    {RECURRENCE_OPTIONS_M.map((o) => (
+                      <Pressable
+                        key={o.value}
+                        style={[
+                          styles.catPill,
+                          newRecurrenceKey === o.value && styles.catPillActive,
+                        ]}
+                        onPress={() => setNewRecurrenceKey(o.value)}
+                      >
+                        <Text
+                          style={[
+                            styles.catPillText,
+                            newRecurrenceKey === o.value && styles.catPillTextActive,
+                          ]}
+                        >
+                          {o.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
 
               <Pressable
                 style={styles.submitBtn}

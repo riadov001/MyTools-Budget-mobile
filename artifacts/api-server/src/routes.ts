@@ -5,7 +5,7 @@ import { z } from "zod";
 import { hashPassword, comparePassword, generateToken, authenticate, requireRole } from "./auth";
 import { setupApiGateway, setupApiAdmin } from "./api-gateway";
 import { generateDashboardPDF, generateSupplierInvoicePDF, generateExpensesPDF } from "./pdf";
-import { setupCron } from "./cron";
+import { setupCron, computeNextOccurrence } from "./cron";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import {
   sendInvoiceNotification, sendWelcomeEmail, sendMonthlyReport,
@@ -823,7 +823,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/invoices", authenticate, requireRole(["ADMIN", "SUPER_ADMIN"]), ar(async (req, res) => {
     try {
       const { items, ...invoiceData } = req.body;
-      const input = { ...insertInvoiceSchema.parse(invoiceData), applicationId: appId(req) };
+      const parsed = insertInvoiceSchema.parse(invoiceData);
+      // Server-authoritative recurrence scheduling (calendar-stable, never trusts client math)
+      const input = {
+        ...parsed,
+        applicationId: appId(req),
+        nextOccurrenceDate: parsed.isRecurring && parsed.recurrenceFrequency
+          ? computeNextOccurrence(new Date(parsed.issuedDate), parsed.recurrenceFrequency, parsed.recurrenceInterval ?? 1)
+          : null,
+      };
       const inv = await storage.createInvoice(input);
       if (items && Array.isArray(items)) {
         for (const item of items) {
@@ -837,7 +845,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/invoices/:id", authenticate, requireRole(["ADMIN", "SUPER_ADMIN"]), ar(async (req, res) => {
     try {
       const { items, ...invoiceData } = req.body;
-      const inv = await storage.updateInvoice(+req.params.id, insertInvoiceSchema.partial().parse(invoiceData));
+      const parsed = insertInvoiceSchema.partial().parse(invoiceData);
+      // If recurrence is being (re)enabled or its frequency/anchor changed, recompute server-side
+      if (parsed.isRecurring && parsed.recurrenceFrequency && (parsed.issuedDate || parsed.nextOccurrenceDate == null)) {
+        const anchor = parsed.issuedDate ? new Date(parsed.issuedDate) : new Date();
+        parsed.nextOccurrenceDate = computeNextOccurrence(anchor, parsed.recurrenceFrequency, parsed.recurrenceInterval ?? 1);
+      } else if (parsed.isRecurring === false) {
+        parsed.nextOccurrenceDate = null;
+      }
+      const inv = await storage.updateInvoice(+req.params.id, parsed);
       if (items && Array.isArray(items)) {
         await storage.deleteInvoiceItems(inv.id);
         for (const item of items) {
@@ -920,13 +936,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }));
   app.post("/api/expenses", authenticate, ar(async (req, res) => {
     try {
-      const input = { ...insertExpenseSchema.parse(req.body), applicationId: appId(req), userId: req.user!.id };
+      const parsed = insertExpenseSchema.parse(req.body);
+      const input = {
+        ...parsed,
+        applicationId: appId(req),
+        userId: req.user!.id,
+        // Server-authoritative recurrence scheduling
+        nextOccurrenceDate: parsed.isRecurring && parsed.recurrenceFrequency
+          ? computeNextOccurrence(new Date(parsed.date), parsed.recurrenceFrequency, parsed.recurrenceInterval ?? 1)
+          : null,
+      };
       res.status(201).json(await storage.createExpense(input));
     } catch (e: any) { errH(e, res); }
   }));
   app.put("/api/expenses/:id", authenticate, requireRole(["ADMIN", "SUPER_ADMIN"]), ar(async (req, res) => {
-    try { res.json(await storage.updateExpense(+req.params.id, insertExpenseSchema.partial().parse(req.body))); }
-    catch (e: any) { errH(e, res); }
+    try {
+      const parsed = insertExpenseSchema.partial().parse(req.body);
+      if (parsed.isRecurring && parsed.recurrenceFrequency && (parsed.date || parsed.nextOccurrenceDate == null)) {
+        const anchor = parsed.date ? new Date(parsed.date) : new Date();
+        parsed.nextOccurrenceDate = computeNextOccurrence(anchor, parsed.recurrenceFrequency, parsed.recurrenceInterval ?? 1);
+      } else if (parsed.isRecurring === false) {
+        parsed.nextOccurrenceDate = null;
+      }
+      res.json(await storage.updateExpense(+req.params.id, parsed));
+    } catch (e: any) { errH(e, res); }
   }));
   app.delete("/api/expenses/:id", authenticate, requireRole(["ADMIN", "SUPER_ADMIN"]), ar(async (req, res) => {
     await storage.deleteExpense(+req.params.id); res.status(204).end();
@@ -966,6 +999,145 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }));
   app.delete("/api/journal/:id", authenticate, requireRole(["ADMIN", "SUPER_ADMIN"]), ar(async (req, res) => {
     await storage.deleteJournalEntry(+req.params.id); res.status(204).end();
+  }));
+
+  // ─── REMINDERS (Mobile agenda — aggregates upcoming bills) ────────────────
+  app.get("/api/reminders", authenticate, ar(async (req, res) => {
+    try {
+      const application = appId(req);
+      const now = new Date();
+      const horizon = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000); // 60 days ahead
+
+      type Reminder = {
+        id: string;
+        kind: "supplier_invoice" | "service" | "expense" | "invoice" | "recurring_expense" | "recurring_invoice";
+        title: string;
+        amount?: string;
+        currency?: string;
+        dueDate: string;
+        status?: string;
+        meta?: Record<string, unknown>;
+      };
+
+      const reminders: Reminder[] = [];
+
+      // 1) Supplier invoices coming due (unpaid)
+      const supplierInvs = await storage.getSupplierInvoices(application);
+      for (const inv of supplierInvs) {
+        const due = new Date(inv.dueDate);
+        if (inv.status === "paid" || inv.status === "cancelled") continue;
+        if (due >= now && due <= horizon) {
+          reminders.push({
+            id: `supplier_invoice:${inv.id}`,
+            kind: "supplier_invoice",
+            title: `Facture fournisseur ${inv.number} — ${inv.supplierName}`,
+            amount: inv.total as string,
+            currency: inv.currency,
+            dueDate: due.toISOString(),
+            status: inv.status,
+          });
+        }
+      }
+
+      // 2) Client invoices coming due (unpaid)
+      const clientInvs = await storage.getInvoices(application);
+      for (const inv of clientInvs) {
+        const due = new Date(inv.dueDate);
+        if (inv.status === "paid" || inv.status === "cancelled") continue;
+        if (due >= now && due <= horizon) {
+          reminders.push({
+            id: `invoice:${inv.id}`,
+            kind: "invoice",
+            title: `Facture client ${inv.number} — ${inv.clientName}`,
+            amount: inv.total as string,
+            currency: inv.currency,
+            dueDate: due.toISOString(),
+            status: inv.status,
+          });
+        }
+      }
+
+      // 3) SaaS subscriptions next billing date
+      try {
+        const allServices = await storage.getServices(application);
+        for (const s of allServices) {
+          if (s.status !== "active" || !s.nextBillingDate) continue;
+          const next = new Date(s.nextBillingDate);
+          if (next >= now && next <= horizon) {
+            reminders.push({
+              id: `service:${s.id}`,
+              kind: "service",
+              title: `Abonnement ${s.name}`,
+              amount: s.cost as string,
+              currency: s.currency,
+              dueDate: next.toISOString(),
+            });
+          }
+        }
+      } catch {
+        // services storage may be optional in some builds — don't fail the whole route
+      }
+
+      // 4) Unpaid expenses with a due date
+      const allExpenses = await storage.getExpenses(application);
+      for (const e of allExpenses) {
+        if (!e.dueDate || e.status === "paid" || e.status === "reimbursed" || e.status === "rejected") continue;
+        const due = new Date(e.dueDate);
+        if (due >= now && due <= horizon) {
+          reminders.push({
+            id: `expense:${e.id}`,
+            kind: "expense",
+            title: `Dépense ${e.description}`,
+            amount: e.total as string,
+            currency: "EUR",
+            dueDate: due.toISOString(),
+            status: e.status,
+          });
+        }
+        // 5) Upcoming recurring expense generation
+        if (e.isRecurring && e.nextOccurrenceDate) {
+          const next = new Date(e.nextOccurrenceDate);
+          const endOk = !e.recurrenceEndDate || new Date(e.recurrenceEndDate) >= next;
+          if (endOk && next >= now && next <= horizon) {
+            reminders.push({
+              id: `recurring_expense:${e.id}`,
+              kind: "recurring_expense",
+              title: `🔁 ${e.description} (récurrent)`,
+              amount: e.total as string,
+              currency: "EUR",
+              dueDate: next.toISOString(),
+              meta: { frequency: e.recurrenceFrequency, interval: e.recurrenceInterval },
+            });
+          }
+        }
+      }
+
+      // 6) Upcoming recurring invoice generation
+      for (const inv of clientInvs) {
+        if (inv.isRecurring && inv.nextOccurrenceDate) {
+          const next = new Date(inv.nextOccurrenceDate);
+          const endOk = !inv.recurrenceEndDate || new Date(inv.recurrenceEndDate) >= next;
+          if (endOk && next >= now && next <= horizon) {
+            reminders.push({
+              id: `recurring_invoice:${inv.id}`,
+              kind: "recurring_invoice",
+              title: `🔁 Facture ${inv.number} (récurrente)`,
+              amount: inv.total as string,
+              currency: inv.currency,
+              dueDate: next.toISOString(),
+              meta: { frequency: inv.recurrenceFrequency, interval: inv.recurrenceInterval },
+            });
+          }
+        }
+      }
+
+      reminders.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+      res.json({ reminders });
+    } catch (e: unknown) {
+      console.error("[Reminders] error:", e);
+      const message = e instanceof Error ? e.message : "Erreur";
+      res.status(500).json({ message });
+    }
   }));
 
   // ─── SETTINGS ─────────────────────────────────────────────────────────────
@@ -1245,6 +1417,53 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   }));
 
+  // ─── OCR BATCH (Mobile multi-file scan) ────────────────────────────────
+  app.post("/api/ocr/batch", authenticate, upload.array("files", 10), ar(async (req, res) => {
+    try {
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      if (files.length === 0) return res.status(400).json({ message: "Aucun fichier fourni" });
+      const docType = (req.body?.type as string) || "invoice";
+
+      const results = await Promise.all(
+        files.map(async (file) => {
+          try {
+            const r = await analyzeDocument(file.buffer, file.originalname, docType);
+            const dateStr = r.date || (r.dueDate ?? undefined);
+            return {
+              filename: file.originalname,
+              category: r.suggestedCategory || r.type,
+              vendor: r.supplierName,
+              date: dateStr,
+              amount: r.totalAmount ?? r.totalNet,
+              type: r.type,
+              documentNature: r.documentNature,
+              confidence: r.confidence,
+              invoiceNumber: r.invoiceNumber,
+              totalNet: r.totalNet,
+              taxAmount: r.taxAmount,
+              taxRate: r.taxRate,
+              currency: r.currency,
+              paymentMethod: r.paymentMethod,
+              supplierSiret: r.supplierSiret,
+              supplierVatNumber: r.supplierVatNumber,
+              lineItems: r.lineItems,
+              warnings: r.warnings,
+            };
+          } catch (e: unknown) {
+            const message = e instanceof Error ? e.message : "Erreur OCR";
+            return { filename: file.originalname, error: message };
+          }
+        }),
+      );
+      res.json({ results });
+    } catch (e: unknown) {
+      console.error("OCR Batch error:", e);
+      const status = e instanceof Error && "status" in e ? (e as { status: number }).status : 500;
+      const message = e instanceof Error ? e.message : "Erreur OCR batch";
+      res.status(status).json({ message });
+    }
+  }));
+
   // ─── OCR DOCUMENT SCANNING (MINDEE) [LEGACY] ────────────────────────────
   app.post("/api/ocr/mindee", authenticate, upload.single("file"), ar(async (req, res) => {
     try {
@@ -1319,7 +1538,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           supplierAddress: ocr.supplierAddress ?? null,
           status: "pending",
           subtotal: ht.toFixed(2),
-          taxRate: ocr.taxRate != null ? (ocr.taxRate * 100).toFixed(2) : "20.00",
+          taxRate: ocr.taxRate != null ? Number(ocr.taxRate).toFixed(2) : "20.00",
           taxAmount: tva.toFixed(2),
           total: ttc.toFixed(2),
           currency: "EUR",
@@ -1344,7 +1563,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           clientAddress: ocr.customerAddress ?? null,
           status: "draft",
           subtotal: ht.toFixed(2),
-          taxRate: ocr.taxRate != null ? (ocr.taxRate * 100).toFixed(2) : "20.00",
+          taxRate: ocr.taxRate != null ? Number(ocr.taxRate).toFixed(2) : "20.00",
           taxAmount: tva.toFixed(2),
           total: ttc.toFixed(2),
           currency: "EUR",
