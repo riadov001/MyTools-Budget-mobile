@@ -348,7 +348,7 @@ export async function analyzeDocument(fileBuffer: Buffer, filename: string, _doc
             { text: `\n\nPREMIÈRE ANALYSE (à corriger):\n${JSON.stringify(result, null, 2)}` },
             { text: `\n\nTEXTE BRUT DU DOCUMENT:\n${processorResult.rawText}` },
           ],
-          15000,
+          12000,
         );
         if (secondText) {
           const refined = parseGeminiResponse(secondText);
