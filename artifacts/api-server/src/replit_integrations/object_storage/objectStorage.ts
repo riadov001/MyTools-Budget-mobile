@@ -130,8 +130,31 @@ export class ObjectStorageService {
     }
   }
 
+  // Uploads a buffer directly from the server and returns the normalized
+  // /objects/<id> path. Used for OCR-scanned files we want to persist.
+  async uploadBuffer(
+    buffer: Buffer,
+    contentType: string = "application/octet-stream",
+    appId?: number | null,
+  ): Promise<string> {
+    const privateObjectDir = this.getPrivateObjectDir();
+    if (!privateObjectDir) {
+      throw new Error("PRIVATE_OBJECT_DIR not set.");
+    }
+    const objectId = randomUUID();
+    const tenantSeg = appId != null ? `app-${appId}/` : "";
+    const fullPath = `${privateObjectDir}/uploads/${tenantSeg}${objectId}`;
+    const { bucketName, objectName } = parseObjectPath(fullPath);
+    const bucket = objectStorageClient.bucket(bucketName);
+    const file = bucket.file(objectName);
+    await file.save(buffer, { contentType, resumable: false });
+    return `/objects/uploads/${tenantSeg}${objectId}`;
+  }
+
   // Gets the upload URL for an object entity.
-  async getObjectEntityUploadURL(): Promise<string> {
+  // When `appId` is provided, the object is namespaced under
+  // `uploads/app-<appId>/<uuid>` so the API can verify ownership at attach time.
+  async getObjectEntityUploadURL(appId?: number | null): Promise<{ url: string; objectPath: string }> {
     const privateObjectDir = this.getPrivateObjectDir();
     if (!privateObjectDir) {
       throw new Error(
@@ -141,17 +164,18 @@ export class ObjectStorageService {
     }
 
     const objectId = randomUUID();
-    const fullPath = `${privateObjectDir}/uploads/${objectId}`;
+    const tenantSeg = appId != null ? `app-${appId}/` : "";
+    const fullPath = `${privateObjectDir}/uploads/${tenantSeg}${objectId}`;
 
     const { bucketName, objectName } = parseObjectPath(fullPath);
 
-    // Sign URL for PUT method with TTL
-    return signObjectURL({
+    const url = await signObjectURL({
       bucketName,
       objectName,
       method: "PUT",
       ttlSec: 900,
     });
+    return { url, objectPath: `/objects/uploads/${tenantSeg}${objectId}` };
   }
 
   // Gets the object entity file from the object path.

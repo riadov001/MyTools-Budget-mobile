@@ -90,6 +90,18 @@ pnpm monorepo with one shared Express backend serving a React Native Expo mobile
 | `STRIPE_SECRET_KEY` | Stripe payments |
 | `LINXO_CLIENT_ID` / `LINXO_CLIENT_SECRET` | Open Banking (Linxo) |
 
+## Media / pièces jointes (DEFAULT_OBJECT_STORAGE_ID)
+
+Tous les fichiers (transactions, dépenses, factures, factures fournisseur, rendez-vous, OCR) sont persistés dans Replit Object Storage — aucun fichier sur disque local ni en mémoire.
+
+- **Schéma**: colonnes `attachment_path` + `attachment_name` sur `bank_transactions`, `expenses`, `invoices`, `supplier_invoices`, `appointments`
+- **Flux client (3 étapes)**: `POST /api/uploads/request-url` → `PUT` direct GCS → `POST /api/<resource>/:id/attachment {objectPath, attachmentName}`
+- **Endpoints attach**: `/api/banking/transactions/:id/attachment`, `/api/expenses/:id/attachment`, `/api/invoices/:id/attachment`, `/api/supplier-invoices/:id/attachment`, `/api/appointments/:id/attachment` — tous tenant-safe (vérifient `applicationId` sauf SUPER/ROOT)
+- **OCR auto-save**: `/api/ocr/scan|auto|batch|mindee` sauvent en parallèle le fichier source dans le stockage objet et renvoient `objectPath` + `attachmentName` — le client peut lier directement la dépense créée
+- **Helper serveur**: `ObjectStorageService.uploadBuffer(buffer, contentType)` (utilisé par OCR)
+- **Composant PWA réutilisable**: `<AttachmentButton linkEndpoint="..." currentPath onUploaded />` — input file caché, lien vers la pièce jointe existante, libellé "Joindre"/"Remplacer"
+- **Servir les fichiers**: `GET /objects/*` (déjà câblé par `registerObjectStorageRoutes`)
+
 ## Notes
 
 - `sharp` is loaded dynamically — OCR falls back to raw images if sharp isn't built

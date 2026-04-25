@@ -22,6 +22,7 @@ const INVOICE_RECURRENCE_OPTIONS: Array<{ value: string; fr: string; en: string 
 import { Plus, FileText, Edit, CheckCircle, Clock, AlertTriangle, XCircle, Send, Trash2, ScanLine } from "lucide-react";
 import { Link } from "wouter";
 import { ConfirmDelete } from "@/components/confirm-delete";
+import { AttachmentButton } from "@/components/AttachmentButton";
 import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import type { Invoice } from "@shared/schema";
@@ -424,6 +425,14 @@ export function Invoices() {
                               <Send className="w-3 h-3 text-blue-400" />
                             </Button>
                           )}
+                          <AttachmentButton
+                            linkEndpoint={`/api/invoices/${inv.id}/attachment`}
+                            currentPath={(inv as any).attachmentPath}
+                            currentName={(inv as any).attachmentName}
+                            onUploaded={() => qc.invalidateQueries({ queryKey: ["/api/invoices"] })}
+                            size="icon"
+                            variant="ghost"
+                          />
                           <Button variant="ghost" size="sm" onClick={() => { setEditing(inv); setOpen(true); }}>
                             <Edit className="w-3 h-3" />
                           </Button>

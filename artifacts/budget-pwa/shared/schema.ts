@@ -85,6 +85,8 @@ export const invoices = pgTable("invoices", {
   paidDate: timestamp("paid_date"),
   notes: text("notes"),
   applicationId: integer("application_id").references(() => applications.id),
+  attachmentPath: text("attachment_path"),
+  attachmentName: text("attachment_name"),
   // ─── Recurrence ──────────────────────────────────────────────────────────
   isRecurring: boolean("is_recurring").notNull().default(false),
   recurrenceFrequency: text("recurrence_frequency"), // daily | weekly | monthly | yearly
@@ -126,6 +128,8 @@ export const supplierInvoices = pgTable("supplier_invoices", {
   paidDate: timestamp("paid_date"),
   notes: text("notes"),
   applicationId: integer("application_id").references(() => applications.id),
+  attachmentPath: text("attachment_path"),
+  attachmentName: text("attachment_name"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -516,6 +520,8 @@ export const appointments = pgTable("appointments", {
   status: text("status").notNull().default("pending"),
   paidAt: timestamp("paid_at"),
   notes: text("notes"),
+  attachmentPath: text("attachment_path"),
+  attachmentName: text("attachment_name"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (t) => [

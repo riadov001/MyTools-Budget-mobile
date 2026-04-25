@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { AttachmentButton } from "@/components/AttachmentButton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -583,7 +584,15 @@ export function Expenses() {
                   <Icon className="w-3 h-3" />
                   {t(cfg.label, cfg.labelEn)}
                 </Badge>
-                <div className="flex gap-1">
+                <div className="flex gap-1 items-center">
+                  <AttachmentButton
+                    linkEndpoint={`/api/expenses/${exp.id}/attachment`}
+                    currentPath={(exp as any).attachmentPath}
+                    currentName={(exp as any).attachmentName}
+                    onUploaded={() => qc.invalidateQueries({ queryKey: ["/api/expenses"] })}
+                    size="icon"
+                    variant="ghost"
+                  />
                   <Button variant="ghost" size="sm" onClick={() => { setEditing(list.find(e => e.id === exp.id) ?? exp); setOpen(true); }} data-testid={`button-edit-expense-${exp.id}`}>
                     <Edit className="w-3.5 h-3.5" />
                   </Button>

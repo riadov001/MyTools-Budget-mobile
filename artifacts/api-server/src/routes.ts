@@ -1472,12 +1472,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }));
 
   // ─── OCR DOCUMENT SCANNING (GEMINI) ────────────────────────────────────
+  // Helper : persiste le fichier OCR dans le stockage objet par défaut
+  // pour qu'on puisse le rattacher à la dépense créée. Tolérant aux erreurs.
+  const saveOcrSourceToObjectStorage = async (file: Express.Multer.File, req?: any) => {
+    try {
+      const { ObjectStorageService } = await import("./replit_integrations/object_storage/objectStorage");
+      const svc = new ObjectStorageService();
+      const aid = req && !isSuperOrRoot(req.user?.role) ? appId(req) : (req ? appId(req) : null);
+      const objectPath = await svc.uploadBuffer(file.buffer, file.mimetype || "application/octet-stream", aid);
+      return { objectPath, attachmentName: file.originalname };
+    } catch (err) {
+      console.warn("[OCR] Sauvegarde stockage objet échouée:", err instanceof Error ? err.message : err);
+      return null;
+    }
+  };
+
   app.post("/api/ocr/scan", authenticate, upload.single("file"), ar(async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "Aucun fichier fourni" });
       const docType = (req.body?.type as string) || "invoice";
-      const result = await analyzeDocument(req.file.buffer, req.file.originalname, docType);
-      res.json(result);
+      const [result, stored] = await Promise.all([
+        analyzeDocument(req.file.buffer, req.file.originalname, docType),
+        saveOcrSourceToObjectStorage(req.file, req),
+      ]);
+      res.json({ ...result, ...(stored ?? {}) });
     } catch (e: unknown) {
       console.error("OCR error:", e);
       const status = e instanceof Error && "status" in e ? (e as { status: number }).status : 500;
@@ -1491,12 +1509,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       if (!req.file) return res.status(400).json({ message: "Aucun fichier fourni" });
       const { scanInvoiceWithMindee } = await import("./services/mindee");
-      
+      const storedPromise = saveOcrSourceToObjectStorage(req.file, req);
+
       // Try Mindee first (mock or real)
       try {
         const result = await scanInvoiceWithMindee(req.file.buffer, req.file.originalname);
         console.log(`[OCR Auto] ✓ Mindee succeeded, confidence=${result.confidence}`);
-        return res.json(result);
+        const stored = await storedPromise;
+        return res.json({ ...result, ...(stored ?? {}) });
       } catch (mindeeErr) {
         console.log(`[OCR Auto] Mindee failed, fallback to Gemini: ${mindeeErr instanceof Error ? mindeeErr.message : "unknown error"}`);
       }
@@ -1505,7 +1525,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const docType = (req.body?.type as string) || "invoice";
       const result = await analyzeDocument(req.file.buffer, req.file.originalname, docType);
       console.log(`[OCR Auto] ✓ Gemini succeeded, confidence=${result.confidence}`);
-      res.json(result);
+      const stored = await storedPromise;
+      res.json({ ...result, ...(stored ?? {}) });
     } catch (e: unknown) {
       console.error("OCR Auto error:", e);
       const status = e instanceof Error && "status" in e ? (e as { status: number }).status : 500;
@@ -1524,7 +1545,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const results = await Promise.all(
         files.map(async (file) => {
           try {
-            const r = await analyzeDocument(file.buffer, file.originalname, docType);
+            const [r, stored] = await Promise.all([
+              analyzeDocument(file.buffer, file.originalname, docType),
+              saveOcrSourceToObjectStorage(file, req),
+            ]);
             const dateStr = r.date || (r.dueDate ?? undefined);
             return {
               filename: file.originalname,
@@ -1545,6 +1569,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               supplierVatNumber: r.supplierVatNumber,
               lineItems: r.lineItems,
               warnings: r.warnings,
+              objectPath: stored?.objectPath,
+              attachmentName: stored?.attachmentName,
             };
           } catch (e: unknown) {
             const message = e instanceof Error ? e.message : "Erreur OCR";
@@ -1566,8 +1592,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       if (!req.file) return res.status(400).json({ message: "Aucun fichier fourni" });
       const { scanInvoiceWithMindee } = await import("./services/mindee");
-      const result = await scanInvoiceWithMindee(req.file.buffer, req.file.originalname);
-      res.json(result);
+      const [result, stored] = await Promise.all([
+        scanInvoiceWithMindee(req.file.buffer, req.file.originalname),
+        saveOcrSourceToObjectStorage(req.file, req),
+      ]);
+      res.json({ ...result, ...(stored ?? {}) });
     } catch (e: unknown) {
       console.error("Mindee OCR error:", e);
       const message = e instanceof Error ? e.message : "Erreur Mindee";
@@ -2155,28 +2184,110 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(results);
   }));
 
+  // Helper : récupère la transaction + vérifie que l'utilisateur a accès
+  // via bankAccount.applicationId (SUPER/ROOT bypassent).
+  const requireOwnedTransaction = async (req: any, txId: number) => {
+    const tx = await storage.getBankTransaction(txId);
+    if (!tx) return { error: 404 as const };
+    if (isSuperOrRoot(req.user!.role)) return { tx };
+    const accountId = (tx as any).bankAccountId;
+    const account = accountId ? await storage.getBankAccount(accountId) : null;
+    if (!account || account.applicationId !== appId(req)) {
+      return { error: 403 as const };
+    }
+    return { tx };
+  };
+
+  // Champs autorisés en PATCH (anti tamper) : exclut applicationId, id, etc.
+  const PATCH_TX_ALLOWED = new Set([
+    "vatRate", "vatAmount", "netAmount", "validated", "validatedAt",
+    "attachmentPath", "attachmentName", "category", "description", "notes",
+  ]);
+
   // PATCH transaction (update vatRate, vatAmount, attachmentPath…)
   app.patch("/api/banking/transactions/:id", authenticate, ar(async (req, res) => {
     const txId = parseInt(req.params.id);
-    const tx = await storage.getBankTransaction(txId);
-    if (!tx) return res.status(404).json({ error: "Transaction introuvable" });
-    const updated = await storage.updateBankTransaction(txId, req.body);
+    const guard = await requireOwnedTransaction(req, txId);
+    if (guard.error === 404) return res.status(404).json({ error: "Transaction introuvable" });
+    if (guard.error === 403) return res.status(403).json({ error: "Accès interdit" });
+    const safe: any = {};
+    for (const k of Object.keys(req.body || {})) {
+      if (PATCH_TX_ALLOWED.has(k)) safe[k] = req.body[k];
+    }
+    const updated = await storage.updateBankTransaction(txId, safe);
     res.json(updated);
   }));
 
   // Lier pièce jointe (objectPath retourné après upload presigned)
   app.post("/api/banking/transactions/:id/attachment", authenticate, ar(async (req, res) => {
     const txId = parseInt(req.params.id);
-    const tx = await storage.getBankTransaction(txId);
-    if (!tx) return res.status(404).json({ error: "Transaction introuvable" });
+    const guard = await requireOwnedTransaction(req, txId);
+    if (guard.error === 404) return res.status(404).json({ error: "Transaction introuvable" });
+    if (guard.error === 403) return res.status(403).json({ error: "Accès interdit" });
     const { objectPath, attachmentName } = req.body;
-    if (!objectPath) return res.status(400).json({ error: "objectPath requis" });
+    const v = validateUploadedPath(objectPath, req);
+    if (!v.ok) return res.status(v.status).json({ error: v.msg });
     const updated = await storage.updateBankTransaction(txId, {
       attachmentPath: objectPath,
       attachmentName: attachmentName || objectPath.split("/").pop(),
     });
     res.json(updated);
   }));
+
+  // ─── PIÈCES JOINTES GÉNÉRIQUES (DEFAULT_OBJECT_STORAGE_ID) ─────────────
+  // Toutes les ressources métier acceptent une pièce jointe via 3 étapes :
+  //   1) POST /api/uploads/request-url → presigned URL + objectPath
+  //   2) PUT (client) directement sur Google Cloud Storage
+  //   3) POST /api/<resource>/:id/attachment {objectPath, attachmentName}
+  // Vérifie que `objectPath` est valide ET appartient au tenant courant.
+  // Les uploads sont namespaced sous /objects/uploads/app-<appId>/<uuid> par
+  // /api/uploads/request-url et l'OCR ; un chemin hors préfixe est rejeté.
+  // SUPER/ROOT peuvent attacher n'importe quel chemin (admin tooling).
+  const validateUploadedPath = (
+    objectPath: any,
+    req: any,
+  ): { ok: true } | { ok: false; status: number; msg: string } => {
+    if (!objectPath || typeof objectPath !== "string" || !objectPath.startsWith("/objects/")) {
+      return { ok: false, status: 400, msg: "objectPath /objects/... requis" };
+    }
+    if (isSuperOrRoot(req.user!.role)) return { ok: true };
+    const aid = appId(req);
+    if (aid == null) return { ok: false, status: 403, msg: "Tenant non identifié" };
+    const expectedPrefix = `/objects/uploads/app-${aid}/`;
+    if (!objectPath.startsWith(expectedPrefix)) {
+      return { ok: false, status: 403, msg: "Pièce jointe d'un autre tenant" };
+    }
+    return { ok: true };
+  };
+
+  const linkAttachment = (
+    fetcher: (id: number) => Promise<any>,
+    updater: (id: number, patch: any) => Promise<any>,
+  ) => ar(async (req: any, res: any) => {
+    const id = parseInt(req.params.id);
+    const row = await fetcher(id);
+    if (!row) return res.status(404).json({ error: "Ressource introuvable" });
+    if (!isSuperOrRoot(req.user!.role) && row.applicationId !== appId(req)) {
+      return res.status(403).json({ error: "Accès interdit" });
+    }
+    const { objectPath, attachmentName } = req.body;
+    const v = validateUploadedPath(objectPath, req);
+    if (!v.ok) return res.status(v.status).json({ error: v.msg });
+    const updated = await updater(id, {
+      attachmentPath: objectPath,
+      attachmentName: attachmentName || objectPath.split("/").pop(),
+    });
+    res.json(updated);
+  });
+
+  app.post("/api/expenses/:id/attachment", authenticate,
+    linkAttachment((id) => storage.getExpense(id), (id, p) => storage.updateExpense(id, p)));
+  app.post("/api/invoices/:id/attachment", authenticate,
+    linkAttachment((id) => storage.getInvoice(id), (id, p) => storage.updateInvoice(id, p)));
+  app.post("/api/supplier-invoices/:id/attachment", authenticate,
+    linkAttachment((id) => storage.getSupplierInvoice(id), (id, p) => storage.updateSupplierInvoice(id, p)));
+  app.post("/api/appointments/:id/attachment", authenticate,
+    linkAttachment((id) => storage.getAppointment(id), (id, p) => storage.updateAppointment(id, p)));
 
   // Validate transaction → écritures comptables avec TVA
   app.post("/api/banking/transactions/:id/validate", authenticate, requireRole(["ADMIN", "SUPER_ADMIN", "ROOT_ADMIN"]), ar(async (req, res) => {
@@ -2600,7 +2711,71 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   setupApiAdmin(app, authenticate, requireRole);
 
   // ─── OBJECT STORAGE (presigned uploads + serve) ─────────────────────────
-  registerObjectStorageRoutes(app);
+  // ─── OBJECT STORAGE — routes sécurisées (override registerObjectStorageRoutes) ─
+  // /api/uploads/request-url et GET /objects/* sont protégés par auth + tenant.
+  {
+    const { ObjectStorageService, ObjectNotFoundError } =
+      await import("./replit_integrations/object_storage/objectStorage");
+    const { db } = await import("./db");
+    const { bankTransactions, bankAccounts, expenses, invoices, supplierInvoices, appointments } =
+      await import("./shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const svc = new ObjectStorageService();
+
+    // Génère un presigned URL d'upload (auth obligatoire, taille bornée).
+    app.post("/api/uploads/request-url", authenticate, ar(async (req: any, res: any) => {
+      const { name, size, contentType } = req.body ?? {};
+      if (!name || typeof name !== "string") return res.status(400).json({ error: "name requis" });
+      const MAX = 25 * 1024 * 1024; // 25 Mo
+      if (typeof size === "number" && size > MAX) {
+        return res.status(413).json({ error: `Fichier > ${MAX / 1024 / 1024} Mo` });
+      }
+      const aid = appId(req);
+      if (aid == null && !isSuperOrRoot(req.user!.role)) {
+        return res.status(403).json({ error: "Tenant non identifié (X-App-Id requis)" });
+      }
+      const { url: uploadURL, objectPath } = await svc.getObjectEntityUploadURL(aid);
+      res.json({ uploadURL, objectPath, metadata: { name, size, contentType } });
+    }));
+
+    // Vérifie que l'utilisateur courant a accès à ce path via une de ses ressources.
+    const userOwnsAttachment = async (path: string, userAppId: number): Promise<boolean> => {
+      const checks = await Promise.all([
+        db.select({ a: bankTransactions.id, app: bankAccounts.applicationId })
+          .from(bankTransactions)
+          .leftJoin(bankAccounts, eq(bankTransactions.bankAccountId, bankAccounts.id))
+          .where(eq(bankTransactions.attachmentPath, path)),
+        db.select({ app: expenses.applicationId }).from(expenses).where(eq(expenses.attachmentPath, path)),
+        db.select({ app: invoices.applicationId }).from(invoices).where(eq(invoices.attachmentPath, path)),
+        db.select({ app: supplierInvoices.applicationId }).from(supplierInvoices).where(eq(supplierInvoices.attachmentPath, path)),
+        db.select({ app: appointments.applicationId }).from(appointments).where(eq(appointments.attachmentPath, path)),
+      ]);
+      for (const rows of checks) {
+        for (const r of rows as any[]) {
+          if (r.app === userAppId) return true;
+        }
+      }
+      return false;
+    };
+
+    // Sert un objet : auth + ACL tenant. SUPER/ROOT bypassent.
+    app.get(/^\/objects\/(.+)$/, authenticate, ar(async (req: any, res: any) => {
+      try {
+        if (!isSuperOrRoot(req.user!.role)) {
+          const allowed = await userOwnsAttachment(req.path, appId(req));
+          if (!allowed) return res.status(403).json({ error: "Accès interdit" });
+        }
+        const objectFile = await svc.getObjectEntityFile(req.path);
+        await svc.downloadObject(objectFile, res);
+      } catch (error) {
+        if (error instanceof ObjectNotFoundError) {
+          return res.status(404).json({ error: "Fichier introuvable" });
+        }
+        console.error("Erreur lecture objet:", error);
+        return res.status(500).json({ error: "Erreur lecture fichier" });
+      }
+    }));
+  }
 
   return httpServer;
 }

@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AttachmentButton } from "@/components/AttachmentButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -416,6 +417,14 @@ export function Agenda() {
                       <Badge variant="outline" className={`text-[9px] ${ap.status === "paid" ? "text-green-500 border-green-500/30" : ap.status === "overdue" ? "text-red-500 border-red-500/30" : "text-yellow-500 border-yellow-500/30"}`}>
                         {ap.status === "paid" ? t("Payé", "Paid") : ap.status === "overdue" ? t("Retard", "Overdue") : ap.status === "cancelled" ? t("Annulé", "Cancelled") : t("À faire", "Pending")}
                       </Badge>
+                      <AttachmentButton
+                        linkEndpoint={`/api/appointments/${ap.id}/attachment`}
+                        currentPath={(ap as any).attachmentPath}
+                        currentName={(ap as any).attachmentName}
+                        onUploaded={() => qc.invalidateQueries({ queryKey: ["/api/appointments"] })}
+                        size="icon"
+                        variant="ghost"
+                      />
                       <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setEditingAppt(ap); setAppointmentDialogOpen(true); }} data-testid={`button-edit-appt-${ap.id}`}>
                         <Edit3 className="w-3 h-3" />
                       </Button>

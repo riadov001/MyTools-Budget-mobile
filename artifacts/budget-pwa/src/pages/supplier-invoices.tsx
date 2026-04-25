@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Edit, ShoppingCart, FileDown, X, Check, Receipt, AlertTriangle, ScanLine } from "lucide-react";
 import { Link } from "wouter";
 import { ConfirmDelete } from "@/components/confirm-delete";
+import { AttachmentButton } from "@/components/AttachmentButton";
 import { format } from "date-fns";
 import { fr as frLocale, enUS } from "date-fns/locale";
 import type { SupplierInvoice, Supplier, Service } from "@shared/schema";
@@ -412,6 +413,14 @@ export function SupplierInvoices() {
                   >
                     <FileDown className="w-3.5 h-3.5 text-blue-400" />
                   </Button>
+                  <AttachmentButton
+                    linkEndpoint={`/api/supplier-invoices/${inv.id}/attachment`}
+                    currentPath={(inv as any).attachmentPath}
+                    currentName={(inv as any).attachmentName}
+                    onUploaded={() => qc.invalidateQueries({ queryKey: ["/api/supplier-invoices"] })}
+                    size="icon"
+                    variant="ghost"
+                  />
                   <Button variant="ghost" size="sm" data-testid={`button-edit-${inv.id}`} onClick={() => { setEditing(inv); setOpen(true); }}>
                     <Edit className="w-3.5 h-3.5" />
                   </Button>
