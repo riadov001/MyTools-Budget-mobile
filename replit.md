@@ -61,6 +61,17 @@ pnpm monorepo with one shared Express backend serving a React Native Expo mobile
 - **Shared types**: `artifacts/budget-pwa/shared/schema.ts` + `shared/routes.ts`
 - **Base path**: Vite uses `BASE_PATH=/budget-pwa/` env var from artifact.toml
 
+## Appointments / iCal Agenda
+
+- **Table** `appointments`: title, startDate/endDate, source (manual/ical/google), externalUid, **amount**, **direction** (income/expense), **status** (pending/paid/overdue/cancelled), paidAt, location, notes
+- **Routes**: `GET/POST /api/appointments`, `PATCH/DELETE /api/appointments/:id`, `POST /api/appointments/import` (URL or .ics body)
+- **iCal parser**: minimal RFC 5545 (line-folding, VEVENT, UID/SUMMARY/DTSTART/DTEND/LOCATION/DESCRIPTION)
+- **SSRF hardened**: only http(s), DNS-resolved IP allowlist (blocks 10.x/192.168.x/172.16-31.x/127.x/169.254/IPv6 ULA & link-local), 10s timeout, 5MB cap, no redirects
+- **Dedup**: unique index on (application_id, external_uid)
+- **Tenant safety**: PATCH strips applicationId from update payload
+- **Integration**: appointments where status=paid contribute to `totalRevenue` (income) or `totalExpenses` (expense) in `/api/analytics/dashboard`; all appointments appear in `/api/agenda` with type="appointment"; pending/overdue/upcoming appointments appear in `/api/reminders`
+- **PWA UI**: `agenda.tsx` — month calendar, full appointment dialog (CRUD), iCal import dialog (URL or file), filter by type
+
 ## Mobile App
 
 - **Screens**: welcome, consent (RGPD), dashboard, scan (OCR), agenda, budget, profile

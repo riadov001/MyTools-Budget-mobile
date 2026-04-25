@@ -3,7 +3,7 @@ import {
   users, applications, services, reminderSettings, auditLogs,
   accounts, clients, suppliers, invoices, invoiceItems, supplierInvoices,
   creditNotes, creditNoteItems, expenses, payments, journalEntries, userApplications, plaidItems,
-  expenseCategories, passwordResetTokens, bankAccounts,
+  expenseCategories, passwordResetTokens, bankAccounts, appointments,
   accountingEntries, accountingLines,
   type User, type InsertUser,
   type Application, type InsertApplication,
@@ -28,6 +28,7 @@ import {
   type BankTransaction, type InsertBankTransaction,
   type AccountingEntry, type InsertAccountingEntry,
   type AccountingLine, type InsertAccountingLine,
+  type Appointment, type InsertAppointment,
   bankTransactions,
 } from "@shared/schema";
 import { eq, and, desc, sql, gt, gte, lte } from "drizzle-orm";
@@ -337,6 +338,30 @@ export class DatabaseStorage implements IStorage {
   async createBankAccount(account: InsertBankAccount) { const [b] = await db.insert(bankAccounts).values(account).returning(); return b; }
   async updateBankAccount(id: number, updates: Partial<InsertBankAccount>) { const [b] = await db.update(bankAccounts).set(updates).where(eq(bankAccounts.id, id)).returning(); return b; }
   async deleteBankAccount(id: number) { await db.delete(bankAccounts).where(eq(bankAccounts.id, id)); }
+
+  // ─── Appointments ──────────────────────────────────────────────────────────
+  async getAppointments(appId: number): Promise<Appointment[]> {
+    return db.select().from(appointments).where(eq(appointments.applicationId, appId)).orderBy(desc(appointments.startDate));
+  }
+  async getAppointment(id: number): Promise<Appointment | undefined> {
+    const [a] = await db.select().from(appointments).where(eq(appointments.id, id));
+    return a;
+  }
+  async getAppointmentByExternalUid(appId: number, uid: string): Promise<Appointment | undefined> {
+    const [a] = await db.select().from(appointments).where(and(eq(appointments.applicationId, appId), eq(appointments.externalUid, uid)));
+    return a;
+  }
+  async createAppointment(appointment: InsertAppointment): Promise<Appointment> {
+    const [a] = await db.insert(appointments).values(appointment as any).returning();
+    return a;
+  }
+  async updateAppointment(id: number, appointment: Partial<InsertAppointment>): Promise<Appointment> {
+    const [a] = await db.update(appointments).set({ ...appointment, updatedAt: new Date() } as any).where(eq(appointments.id, id)).returning();
+    return a;
+  }
+  async deleteAppointment(id: number): Promise<void> {
+    await db.delete(appointments).where(eq(appointments.id, id));
+  }
 
   // ─── Bank Transactions ─────────────────────────────────────────────────────
   async getBankTransactions(bankAccountId: number) { return db.select().from(bankTransactions).where(eq(bankTransactions.bankAccountId, bankAccountId)).orderBy(desc(bankTransactions.transactedAt)); }

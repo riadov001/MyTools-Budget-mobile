@@ -25,6 +25,7 @@ import {
   insertInvoiceSchema, insertInvoiceItemSchema, insertSupplierInvoiceSchema,
   insertCreditNoteSchema, insertExpenseSchema, insertPaymentSchema, insertJournalEntrySchema,
   insertUserApplicationSchema, insertExpenseCategorySchema,
+  insertAppointmentSchema,
 } from "@shared/schema";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -65,6 +66,67 @@ async function appIdOrFallback(req: any): Promise<number> {
 // Wraps async route handlers and forwards errors to Express error handler
 const ar = (fn: (req: any, res: any, next?: any) => Promise<any>) =>
   (req: any, res: any, next: any) => fn(req, res, next).catch(next);
+
+// ─── iCal parser (minimal RFC 5545 subset) ────────────────────────────────
+type IcalEvent = { uid?: string; summary?: string; description?: string; location?: string; start: Date; end?: Date };
+
+function unfoldICal(raw: string): string[] {
+  // RFC 5545: lines starting with space/tab continue the previous line
+  const lines = raw.replace(/\r/g, "").split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    if ((line.startsWith(" ") || line.startsWith("\t")) && out.length) {
+      out[out.length - 1] += line.slice(1);
+    } else {
+      out.push(line);
+    }
+  }
+  return out;
+}
+
+function parseICalDate(value: string): Date | null {
+  // Forms: 20260425T130000Z, 20260425T130000, 20260425
+  const v = value.trim();
+  const m = v.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/);
+  if (!m) {
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const [, y, mo, d, hh, mm, ss, z] = m;
+  if (!hh) return new Date(Date.UTC(+y, +mo - 1, +d));
+  if (z === "Z") return new Date(Date.UTC(+y, +mo - 1, +d, +hh, +mm, +ss));
+  return new Date(+y, +mo - 1, +d, +hh, +mm, +ss);
+}
+
+function unescapeICalText(s: string): string {
+  return s.replace(/\\n/gi, "\n").replace(/\\,/g, ",").replace(/\\;/g, ";").replace(/\\\\/g, "\\");
+}
+
+function parseICal(raw: string): IcalEvent[] {
+  const lines = unfoldICal(raw);
+  const events: IcalEvent[] = [];
+  let cur: Partial<IcalEvent> | null = null;
+  for (const line of lines) {
+    if (line === "BEGIN:VEVENT") { cur = {}; continue; }
+    if (line === "END:VEVENT") {
+      if (cur && cur.start) events.push(cur as IcalEvent);
+      cur = null; continue;
+    }
+    if (!cur) continue;
+    const colonIdx = line.indexOf(":");
+    if (colonIdx < 0) continue;
+    const left = line.slice(0, colonIdx);
+    const value = line.slice(colonIdx + 1);
+    const key = left.split(";")[0].toUpperCase();
+    if (key === "UID") cur.uid = value.trim();
+    else if (key === "SUMMARY") cur.summary = unescapeICalText(value);
+    else if (key === "DESCRIPTION") cur.description = unescapeICalText(value);
+    else if (key === "LOCATION") cur.location = unescapeICalText(value);
+    else if (key === "DTSTART") { const d = parseICalDate(value); if (d) cur.start = d; }
+    else if (key === "DTEND") { const d = parseICalDate(value); if (d) cur.end = d; }
+  }
+  return events;
+}
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   setupCron();
@@ -679,6 +741,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ]);
     }
 
+    // Appointments — paid ones contribute to revenue/expense
+    let apptList: any[] = [];
+    if (isSuperOrRoot(req.user!.role) && (!headerAppId || headerAppId === "0")) {
+      const allApps = await storage.getApplications();
+      for (const app of allApps) apptList.push(...await storage.getAppointments(app.id));
+    } else if (target) {
+      apptList = await storage.getAppointments(target);
+    }
+
     let monthlyTotal = 0, activeServices = 0;
     const expByCat: Record<string, number> = {};
     svcs.forEach(s => {
@@ -700,8 +771,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return e;
     });
 
-    const totalRevenue = invList.filter(i => i.status === "paid").reduce((s, i) => s + parseFloat(i.total as any), 0);
-    const totalExpenses = resolvedExpenses.reduce((s, e) => s + parseFloat(e.total as any), 0);
+    const apptIncome = apptList
+      .filter(a => a.status === "paid" && a.direction === "income" && a.amount != null)
+      .reduce((s, a) => s + parseFloat(a.amount as any), 0);
+    const apptExpense = apptList
+      .filter(a => a.status === "paid" && a.direction === "expense" && a.amount != null)
+      .reduce((s, a) => s + parseFloat(a.amount as any), 0);
+
+    const totalRevenue = invList.filter(i => i.status === "paid").reduce((s, i) => s + parseFloat(i.total as any), 0) + apptIncome;
+    const totalExpenses = resolvedExpenses.reduce((s, e) => s + parseFloat(e.total as any), 0) + apptExpense;
     const expensesPaid = resolvedExpenses.filter(e => e.status === "paid").reduce((s, e) => s + parseFloat(e.total as any), 0);
     const expensesUnpaid = resolvedExpenses.filter(e => e.status === "unpaid").reduce((s, e) => s + parseFloat(e.total as any), 0);
     const expensesOverdue = resolvedExpenses.filter(e => e.status === "overdue").reduce((s, e) => s + parseFloat(e.total as any), 0);
@@ -1109,6 +1187,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               meta: { frequency: e.recurrenceFrequency, interval: e.recurrenceInterval },
             });
           }
+        }
+      }
+
+      // 6bis) Upcoming appointments (income or expense, pending or overdue)
+      const appts = await storage.getAppointments(application);
+      for (const ap of appts) {
+        const start = new Date(ap.startDate);
+        if (ap.status === "paid" || ap.status === "cancelled") continue;
+        if (start <= horizon && start >= new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)) {
+          reminders.push({
+            id: `appointment:${ap.id}`,
+            kind: "expense",
+            title: `📅 ${ap.title}${ap.amount ? ` — ${ap.amount} €` : ""}`,
+            amount: (ap.amount as string) || undefined,
+            currency: "EUR",
+            dueDate: start.toISOString(),
+            status: ap.status,
+            meta: { source: ap.source, direction: ap.direction },
+          });
         }
       }
 
@@ -1678,15 +1775,159 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { errH(e, res); }
   }));
 
+  // ─── APPOINTMENTS (Agenda externe avec tarification) ──────────────────────
+  app.get("/api/appointments", authenticate, ar(async (req, res) => {
+    const aid = appId(req);
+    const list = await storage.getAppointments(aid);
+    const now = new Date();
+    // Auto mark overdue: pending past startDate
+    const enriched = list.map(a => {
+      if (a.status === "pending" && a.startDate && new Date(a.startDate) < now) {
+        return { ...a, status: "overdue" };
+      }
+      return a;
+    });
+    res.json(enriched);
+  }));
+
+  app.post("/api/appointments", authenticate, ar(async (req, res) => {
+    const aid = appId(req);
+    const input = insertAppointmentSchema.parse({ ...req.body, applicationId: aid });
+    const created = await storage.createAppointment(input);
+    res.status(201).json(created);
+  }));
+
+  app.patch("/api/appointments/:id", authenticate, ar(async (req, res) => {
+    const id = parseInt(req.params.id);
+    const existing = await storage.getAppointment(id);
+    if (!existing) return res.status(404).json({ message: "Rendez-vous introuvable" });
+    if (existing.applicationId !== appId(req) && !isSuperOrRoot(req.user!.role))
+      return res.status(403).json({ message: "Accès refusé" });
+    const updates = insertAppointmentSchema.partial().parse(req.body);
+    // SECURITY: prevent tenant-boundary bypass — applicationId is immutable post-creation
+    delete (updates as any).applicationId;
+    // Auto-set paidAt when transitioning to paid
+    if (updates.status === "paid" && existing.status !== "paid" && !updates.paidAt) {
+      (updates as any).paidAt = new Date();
+    }
+    const updated = await storage.updateAppointment(id, updates);
+    res.json(updated);
+  }));
+
+  app.delete("/api/appointments/:id", authenticate, ar(async (req, res) => {
+    const id = parseInt(req.params.id);
+    const existing = await storage.getAppointment(id);
+    if (!existing) return res.status(404).json({ message: "Rendez-vous introuvable" });
+    if (existing.applicationId !== appId(req) && !isSuperOrRoot(req.user!.role))
+      return res.status(403).json({ message: "Accès refusé" });
+    await storage.deleteAppointment(id);
+    res.json({ message: "Supprimé" });
+  }));
+
+  // iCal import — accepts either a URL { url } or raw iCal text { ics }
+  app.post("/api/appointments/import", authenticate, ar(async (req, res) => {
+    const aid = appId(req);
+    const { url, ics, defaultDirection, defaultAmount } = z.object({
+      url: z.string().url().optional(),
+      ics: z.string().optional(),
+      defaultDirection: z.enum(["income", "expense"]).optional(),
+      defaultAmount: z.union([z.string(), z.number()]).optional(),
+    }).parse(req.body);
+
+    let raw = ics;
+    if (!raw && url) {
+      // ── SSRF protection ──────────────────────────────────────────────
+      let parsed: URL;
+      try { parsed = new URL(url); } catch { return res.status(400).json({ message: "URL invalide" }); }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return res.status(400).json({ message: "Seules les URL http(s) sont autorisées" });
+      }
+      // Resolve hostname & block private/loopback/link-local addresses
+      try {
+        const dns = await import("node:dns/promises");
+        const addrs = await dns.lookup(parsed.hostname, { all: true });
+        const isPrivate = (ip: string) => {
+          if (ip === "::1" || ip === "127.0.0.1" || ip.startsWith("127.")) return true;
+          if (ip.startsWith("10.") || ip.startsWith("192.168.")) return true;
+          if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+          if (ip.startsWith("169.254.")) return true; // link-local / metadata
+          if (ip.toLowerCase().startsWith("fc") || ip.toLowerCase().startsWith("fd")) return true; // unique-local IPv6
+          if (ip.toLowerCase().startsWith("fe80:")) return true; // link-local IPv6
+          return false;
+        };
+        if (addrs.some(a => isPrivate(a.address))) {
+          return res.status(400).json({ message: "URL interne/privée non autorisée" });
+        }
+      } catch (e: any) {
+        return res.status(400).json({ message: `Résolution DNS impossible: ${e.message}` });
+      }
+      const ctrl = new AbortController();
+      const tmo = setTimeout(() => ctrl.abort(), 10000);
+      try {
+        const r = await fetch(parsed.toString(), {
+          headers: { "User-Agent": "Budget-by-MyTools/1.0", "Accept": "text/calendar, text/plain" },
+          signal: ctrl.signal,
+          redirect: "error", // disallow redirects (could bypass SSRF check)
+        });
+        clearTimeout(tmo);
+        if (!r.ok) return res.status(400).json({ message: `Échec téléchargement iCal (HTTP ${r.status})` });
+        // Cap response size at 5 MB
+        const buf = await r.arrayBuffer();
+        if (buf.byteLength > 5 * 1024 * 1024) return res.status(400).json({ message: "Calendrier iCal trop volumineux (>5 Mo)" });
+        raw = new TextDecoder("utf-8").decode(buf);
+      } catch (e: any) {
+        clearTimeout(tmo);
+        return res.status(400).json({ message: `URL iCal inaccessible: ${e.message}` });
+      }
+    }
+    if (!raw) return res.status(400).json({ message: "Fournir 'url' ou 'ics' (contenu iCal)." });
+
+    const events = parseICal(raw);
+    if (events.length === 0) return res.status(400).json({ message: "Aucun événement VEVENT trouvé." });
+
+    let created = 0, updated = 0;
+    for (const ev of events) {
+      const existing = ev.uid ? await storage.getAppointmentByExternalUid(aid, ev.uid) : undefined;
+      const payload: any = {
+        applicationId: aid,
+        title: ev.summary || "Rendez-vous",
+        description: ev.description || null,
+        location: ev.location || null,
+        startDate: ev.start,
+        endDate: ev.end || null,
+        source: "ical",
+        externalUid: ev.uid || null,
+        direction: defaultDirection || "income",
+        status: "pending",
+      };
+      if (defaultAmount != null) payload.amount = String(defaultAmount);
+      if (existing) {
+        await storage.updateAppointment(existing.id, {
+          title: payload.title,
+          description: payload.description,
+          location: payload.location,
+          startDate: payload.startDate,
+          endDate: payload.endDate,
+        });
+        updated++;
+      } else {
+        await storage.createAppointment(payload);
+        created++;
+      }
+    }
+    res.json({ created, updated, total: events.length });
+  }));
+
   // ─── AGENDA / CALENDAR ─────────────────────────────────────────────────
   app.get("/api/agenda", authenticate, ar(async (req, res) => {
     const aid = appId(req);
-    const [invoicesList, supplierInvList, expList, svcList, payList] = await Promise.all([
+    const [invoicesList, supplierInvList, expList, svcList, payList, apptList] = await Promise.all([
       storage.getInvoices(aid),
       storage.getSupplierInvoices(aid),
       storage.getExpenses(aid),
       storage.getServices(aid),
       storage.getPayments(aid),
+      storage.getAppointments(aid),
     ]);
 
     const events: any[] = [];
@@ -1755,6 +1996,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         status: pay.status,
         direction: pay.direction,
         entityId: pay.id,
+      });
+    });
+
+    apptList.forEach(ap => {
+      const status = ap.status === "pending" && new Date(ap.startDate) < new Date() ? "overdue" : ap.status;
+      events.push({
+        id: `appt-${ap.id}`,
+        title: ap.title,
+        date: ap.startDate,
+        type: "appointment",
+        amount: ap.amount ? parseFloat(ap.amount as any) : 0,
+        status,
+        direction: ap.direction === "income" ? "inbound" : "outbound",
+        entityId: ap.id,
       });
     });
 

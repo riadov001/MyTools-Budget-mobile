@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, numeric, index } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, numeric, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -501,6 +501,37 @@ export type InsertApiClient = typeof insertApiClientSchema._type;
 export type InsertApiKey = typeof insertApiKeySchema._type;
 
 // ─── PASSWORD RESET TOKENS ───────────────────────────────────────────────────
+export const appointments = pgTable("appointments", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").references(() => applications.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  location: text("location"),
+  startDate: timestamp("start_date").notNull(),
+  endDate: timestamp("end_date"),
+  source: text("source").notNull().default("manual"),
+  externalUid: text("external_uid"),
+  amount: numeric("amount", { precision: 15, scale: 2 }),
+  direction: text("direction").notNull().default("income"),
+  status: text("status").notNull().default("pending"),
+  paidAt: timestamp("paid_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => [
+  index("appointments_app_idx").on(t.applicationId),
+  uniqueIndex("appointments_app_uid_uniq").on(t.applicationId, t.externalUid),
+]);
+
+export const insertAppointmentSchema = createInsertSchema(appointments).omit({ id: true, createdAt: true, updatedAt: true }).extend({
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date().optional().nullable(),
+  paidAt: z.coerce.date().optional().nullable(),
+  amount: z.union([z.string(), z.number()]).optional().nullable(),
+});
+export type Appointment = typeof appointments.$inferSelect;
+export type InsertAppointment = typeof insertAppointmentSchema._type;
+
 export const passwordResetTokens = pgTable("password_reset_tokens", {
   id: serial("id").primaryKey(),
   email: text("email").notNull(),
