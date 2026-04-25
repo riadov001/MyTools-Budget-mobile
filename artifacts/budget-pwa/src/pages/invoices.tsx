@@ -19,13 +19,13 @@ const INVOICE_RECURRENCE_OPTIONS: Array<{ value: string; fr: string; en: string 
   { value: "yearly:1",    fr: "Tous les ans",        en: "Yearly" },
   { value: "weekly:1",    fr: "Toutes les semaines", en: "Weekly" },
 ];
-import { Plus, FileText, Edit, CheckCircle, Clock, AlertTriangle, XCircle, Send, Trash2, ScanLine } from "lucide-react";
+import { Plus, FileText, Edit, CheckCircle, Clock, AlertTriangle, XCircle, Send, Trash2, ScanLine, Calendar } from "lucide-react";
 import { Link } from "wouter";
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { AttachmentButton } from "@/components/AttachmentButton";
 import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
-import type { Invoice } from "@shared/schema";
+import type { Invoice, Appointment } from "@shared/schema";
 
 const STATUS_CONFIG: Record<string, { label: string; labelEn: string; color: string; icon: React.ElementType }> = {
   draft:    { label: "Brouillon", labelEn: "Draft",    color: "bg-slate-500/20 text-slate-400",   icon: FileText },
@@ -278,6 +278,8 @@ export function Invoices() {
   const [filterStatus, setFilterStatus] = useState("all");
 
   const { data: invoiceList = [], isLoading, isError, refetch } = useQuery<Invoice[]>({ queryKey: ["/api/invoices"] });
+  // RDV payés en revenu : intégrés dans cet onglet (type d'activité = RDV).
+  const { data: appointments = [] } = useQuery<Appointment[]>({ queryKey: ["/api/appointments"] });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/invoices/${id}`),
@@ -295,13 +297,38 @@ export function Invoices() {
     onError: (err: any) => toast({ title: t("Erreur envoi email", "Email error"), description: err?.message, variant: "destructive" }),
   });
 
-  const filtered = filterStatus === "all" ? invoiceList : invoiceList.filter(i => i.status === filterStatus);
+  // Convertit les RDV payés en revenu en lignes virtuelles (type d'activité = RDV).
+  const apptRevenues = appointments
+    .filter(a => a.direction === "income" && a.status === "paid" && a.amount != null)
+    .map(a => {
+      const amt = parseFloat(a.amount as any);
+      const date = (a.paidAt || a.startDate) as any;
+      return {
+        id: -Math.abs(a.id),
+        applicationId: (a as any).applicationId,
+        number: `RDV-${a.id}`,
+        clientName: a.title,
+        clientEmail: null as any,
+        issuedDate: date,
+        dueDate: date,
+        subtotal: amt,
+        total: amt,
+        currency: "EUR",
+        status: "paid",
+        attachmentPath: (a as any).attachmentPath,
+        attachmentName: (a as any).attachmentName,
+        __source: "appointment" as const,
+      } as any;
+    });
+
+  const merged = [...invoiceList, ...apptRevenues];
+  const filtered = filterStatus === "all" ? merged : merged.filter(i => i.status === filterStatus);
 
   const stats = {
-    total: invoiceList.reduce((s, i) => s + parseFloat(i.total as any), 0),
-    paid: invoiceList.filter(i => i.status === "paid").reduce((s, i) => s + parseFloat(i.total as any), 0),
-    pending: invoiceList.filter(i => i.status === "sent").reduce((s, i) => s + parseFloat(i.total as any), 0),
-    overdue: invoiceList.filter(i => i.status === "overdue").length,
+    total: merged.reduce((s, i) => s + parseFloat(i.total as any), 0),
+    paid: merged.filter(i => i.status === "paid").reduce((s, i) => s + parseFloat(i.total as any), 0),
+    pending: merged.filter(i => i.status === "sent").reduce((s, i) => s + parseFloat(i.total as any), 0),
+    overdue: merged.filter(i => i.status === "overdue").length,
   };
 
   return (
@@ -397,11 +424,25 @@ export function Invoices() {
                 ) : filtered.map(inv => {
                   const cfg = STATUS_CONFIG[inv.status] ?? STATUS_CONFIG.draft;
                   const Icon = cfg.icon;
+                  const isAppt = (inv as any).__source === "appointment";
+                  const realApptId = isAppt ? Math.abs(inv.id) : null;
                   return (
-                    <tr key={inv.id} className="border-b border-border/30 hover:bg-accent/20 transition-colors" data-testid={`row-invoice-${inv.id}`}>
+                    <tr
+                      key={isAppt ? `appt-${realApptId}` : inv.id}
+                      className="border-b border-border/30 hover:bg-accent/20 transition-colors"
+                      data-testid={isAppt ? `row-appointment-revenue-${realApptId}` : `row-invoice-${inv.id}`}
+                    >
                       <td className="p-4 font-mono font-semibold text-primary">{inv.number}</td>
                       <td className="p-4">
-                        <div className="font-medium">{inv.clientName}</div>
+                        <div className="font-medium flex items-center gap-2">
+                          {inv.clientName}
+                          {isAppt && (
+                            <Badge variant="outline" className="text-[10px] border-pink-400/40 text-pink-400 bg-pink-500/10 px-1.5 py-0 gap-1">
+                              <Calendar className="w-2.5 h-2.5" />
+                              {t("Type d'activité : RDV", "Activity type: Appointment")}
+                            </Badge>
+                          )}
+                        </div>
                         {inv.clientEmail && <div className="text-xs text-muted-foreground">{inv.clientEmail}</div>}
                       </td>
                       <td className="p-4 text-muted-foreground">{format(new Date(inv.issuedDate!), "dd MMM yyyy", { locale })}</td>
@@ -415,33 +456,43 @@ export function Invoices() {
                       </td>
                       <td className="p-4 text-right">
                         <div className="flex gap-1 justify-end">
-                          {inv.clientEmail && (
-                            <Button
-                              variant="ghost" size="sm"
-                              onClick={() => sendEmailMutation.mutate(inv.id)}
-                              disabled={sendEmailMutation.isPending}
-                              title={t("Envoyer par email", "Send by email")}
-                            >
-                              <Send className="w-3 h-3 text-blue-400" />
-                            </Button>
+                          {isAppt ? (
+                            <Link href="/agenda">
+                              <Button variant="ghost" size="sm" data-testid={`button-open-agenda-rev-${realApptId}`} title={t("Gérer dans l'agenda", "Manage in agenda")}>
+                                <Edit className="w-3 h-3" />
+                              </Button>
+                            </Link>
+                          ) : (
+                            <>
+                              {inv.clientEmail && (
+                                <Button
+                                  variant="ghost" size="sm"
+                                  onClick={() => sendEmailMutation.mutate(inv.id)}
+                                  disabled={sendEmailMutation.isPending}
+                                  title={t("Envoyer par email", "Send by email")}
+                                >
+                                  <Send className="w-3 h-3 text-blue-400" />
+                                </Button>
+                              )}
+                              <AttachmentButton
+                                linkEndpoint={`/api/invoices/${inv.id}/attachment`}
+                                currentPath={(inv as any).attachmentPath}
+                                currentName={(inv as any).attachmentName}
+                                onUploaded={() => qc.invalidateQueries({ queryKey: ["/api/invoices"] })}
+                                size="icon"
+                                variant="ghost"
+                              />
+                              <Button variant="ghost" size="sm" onClick={() => { setEditing(inv); setOpen(true); }}>
+                                <Edit className="w-3 h-3" />
+                              </Button>
+                              <ConfirmDelete
+                                onConfirm={() => deleteMutation.mutate(inv.id)}
+                                isPending={deleteMutation.isPending}
+                                description={`Supprimer la facture « ${inv.number} » de ${inv.clientName} ? Cette action est irréversible.`}
+                                testId={`button-delete-invoice-${inv.id}`}
+                              />
+                            </>
                           )}
-                          <AttachmentButton
-                            linkEndpoint={`/api/invoices/${inv.id}/attachment`}
-                            currentPath={(inv as any).attachmentPath}
-                            currentName={(inv as any).attachmentName}
-                            onUploaded={() => qc.invalidateQueries({ queryKey: ["/api/invoices"] })}
-                            size="icon"
-                            variant="ghost"
-                          />
-                          <Button variant="ghost" size="sm" onClick={() => { setEditing(inv); setOpen(true); }}>
-                            <Edit className="w-3 h-3" />
-                          </Button>
-                          <ConfirmDelete
-                            onConfirm={() => deleteMutation.mutate(inv.id)}
-                            isPending={deleteMutation.isPending}
-                            description={`Supprimer la facture « ${inv.number} » de ${inv.clientName} ? Cette action est irréversible.`}
-                            testId={`button-delete-invoice-${inv.id}`}
-                          />
                         </div>
                       </td>
                     </tr>

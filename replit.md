@@ -69,7 +69,7 @@ pnpm monorepo with one shared Express backend serving a React Native Expo mobile
 - **SSRF hardened**: only http(s), DNS-resolved IP allowlist (blocks 10.x/192.168.x/172.16-31.x/127.x/169.254/IPv6 ULA & link-local), 10s timeout, 5MB cap, no redirects
 - **Dedup**: unique index on (application_id, external_uid)
 - **Tenant safety**: PATCH strips applicationId from update payload
-- **Integration**: appointments where status=paid contribute to `totalRevenue` (income) or `totalExpenses` (expense) in `/api/analytics/dashboard`; all appointments appear in `/api/agenda` with type="appointment"; pending/overdue/upcoming appointments appear in `/api/reminders`
+- **Integration**: appointments where status=paid contribute to `totalRevenue` (income) or `totalExpenses` (expense) in `/api/analytics/dashboard` AND `/api/accounting/pnl` (revenue/revenueTotal/totalExpenses, monthly breakdown, "Rendez-vous" category line). PWA: paid expense-direction RDV are merged as virtual rows in `expenses.tsx` (negative id, `__source:"appointment"`, pink "Type d'activité : RDV" badge, edit/delete replaced by link to /agenda); paid income-direction RDV are merged the same way in `invoices.tsx` (number `RDV-<id>`). All appointments still appear in `/api/agenda` with type="appointment"; pending/overdue/upcoming in `/api/reminders`. **Reconciliation**: backend auto-sets `paidAt = now()` on POST/PATCH when status transitions to "paid" without an explicit paidAt; P&L uses `paidAt ?? startDate` as the period date so legacy paid RDV without paidAt still reconcile.
 - **PWA UI**: `agenda.tsx` — month calendar, full appointment dialog (CRUD), iCal import dialog (URL or file), filter by type
 
 ## Mobile App

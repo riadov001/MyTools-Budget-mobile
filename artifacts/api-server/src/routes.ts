@@ -1822,6 +1822,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/appointments", authenticate, ar(async (req, res) => {
     const aid = appId(req);
     const input = insertAppointmentSchema.parse({ ...req.body, applicationId: aid });
+    // Auto-set paidAt at creation when status is already paid (keeps P&L in sync)
+    if (input.status === "paid" && !input.paidAt) {
+      (input as any).paidAt = new Date();
+    }
     const created = await storage.createAppointment(input);
     res.status(201).json(created);
   }));
@@ -2555,19 +2559,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const inPeriod = (d: Date | string) => { const dt = new Date(d); return dt >= from && dt <= to; };
     const monthNames = ["Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"];
 
-    const [invoicesList, expensesList, supplierInvList, bankTransactions] = await Promise.all([
+    const [invoicesList, expensesList, supplierInvList, bankTransactions, appointmentsList] = await Promise.all([
       storage.getInvoices(aid),
       storage.getExpenses(aid),
       storage.getSupplierInvoices(aid),
       storage.getBankTransactionsByApp(aid),
+      storage.getAppointments(aid),
     ]);
+
+    // RDV payés dans la période — comptés comme revenu/dépense selon `direction`.
+    // Le type d'activité (RDV) est conservé via la catégorie "Rendez-vous" ci-dessous.
+    // Fallback: si paidAt n'est pas renseigné (ex. ancien RDV), on retombe sur startDate
+    // pour rester aligné avec ce qui s'affiche dans Dépenses/Factures (réconciliation).
+    const apptDate = (a: any) => (a.paidAt ?? a.startDate) as Date;
+    const paidAppts = appointmentsList.filter(a => a.status === "paid" && a.amount != null && inPeriod(apptDate(a)));
+    const apptIncome = paidAppts.filter(a => a.direction === "income").reduce((s, a) => s + parseFloat(a.amount as any), 0);
+    const apptExpense = paidAppts.filter(a => a.direction === "expense").reduce((s, a) => s + parseFloat(a.amount as any), 0);
 
     const paidInvoices = invoicesList.filter(i => i.status === "paid" && inPeriod(i.issuedDate));
     const revenue = paidInvoices.reduce((s, i) => s + parseFloat(i.subtotal as any || "0"), 0)
+      + apptIncome
       + bankTransactions
         .filter(tx => tx.validated && tx.amount > 0 && tx.netAmount && tx.transactedAt && inPeriod(tx.transactedAt))
         .reduce((s, tx) => s + Math.abs(tx.netAmount ?? 0) / 100, 0);
     const revenueTotal = paidInvoices.reduce((s, i) => s + parseFloat(i.total as any || "0"), 0)
+      + apptIncome
       + bankTransactions
         .filter(tx => tx.validated && tx.amount > 0 && tx.transactedAt && inPeriod(tx.transactedAt))
         .reduce((s, tx) => s + Math.abs(tx.amount) / 100, 0);
@@ -2579,6 +2595,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       .reduce((s, tx) => s + Math.abs(tx.netAmount ?? 0) / 100, 0);
     const totalExpenses = expenses_.reduce((s, e) => s + parseFloat(e.amount as any || "0"), 0)
       + supplierInv_.reduce((s, i) => s + parseFloat(i.subtotal as any || "0"), 0)
+      + apptExpense
       + bankExpenses;
 
     const grossProfit = revenue - totalExpenses;
@@ -2588,14 +2605,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const mInvoices = paidInvoices.filter(i => new Date(i.issuedDate).getMonth() === idx);
       const mExpenses = expenses_.filter(e => new Date(e.date!).getMonth() === idx);
       const mSI = supplierInv_.filter(i => new Date(i.issuedDate).getMonth() === idx);
-      const mRev = mInvoices.reduce((s, i) => s + parseFloat(i.subtotal as any || "0"), 0);
+      const mAppts = paidAppts.filter(a => new Date(a.paidAt as any).getMonth() === idx);
+      const mApptInc = mAppts.filter(a => a.direction === "income").reduce((s, a) => s + parseFloat(a.amount as any), 0);
+      const mApptExp = mAppts.filter(a => a.direction === "expense").reduce((s, a) => s + parseFloat(a.amount as any), 0);
+      const mRev = mInvoices.reduce((s, i) => s + parseFloat(i.subtotal as any || "0"), 0) + mApptInc;
       const mExp = mExpenses.reduce((s, e) => s + parseFloat(e.amount as any || "0"), 0)
-        + mSI.reduce((s, i) => s + parseFloat(i.subtotal as any || "0"), 0);
+        + mSI.reduce((s, i) => s + parseFloat(i.subtotal as any || "0"), 0)
+        + mApptExp;
       return { month: m, revenue: mRev, expenses: mExp, profit: mRev - mExp };
     });
 
     const expensesByCategory: Record<string, number> = {};
     expenses_.forEach(e => { expensesByCategory[e.category] = (expensesByCategory[e.category] || 0) + parseFloat(e.amount as any || "0"); });
+    // RDV payés en dépense → catégorie "Rendez-vous" (type d'activité = RDV)
+    const apptExpenseSum = paidAppts.filter(a => a.direction === "expense").reduce((s, a) => s + parseFloat(a.amount as any), 0);
+    if (apptExpenseSum > 0) expensesByCategory["Rendez-vous"] = (expensesByCategory["Rendez-vous"] || 0) + apptExpenseSum;
 
     res.json({
       year,

@@ -11,12 +11,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Edit, Receipt, CheckCircle, Clock, AlertTriangle, FileText, ScanLine, Tag, X } from "lucide-react";
+import { Plus, Edit, Receipt, CheckCircle, Clock, AlertTriangle, FileText, ScanLine, Tag, X, Calendar } from "lucide-react";
 import { Link } from "wouter";
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { format } from "date-fns";
 import { fr as frLocale, enUS } from "date-fns/locale";
-import type { Expense, ExpenseCategory } from "@shared/schema";
+import type { Expense, ExpenseCategory, Appointment } from "@shared/schema";
 
 const DEFAULT_CATEGORIES = ["Infrastructure", "Voyage", "Logiciels", "Bureau", "Marketing", "Personnel", "Sous-traitance", "Fournisseurs", "Clients", "Autre"];
 
@@ -323,6 +323,8 @@ export function Expenses() {
 
   const { data: list = [], isLoading, isError, refetch } = useQuery<Expense[]>({ queryKey: ["/api/expenses"] });
   const { data: dynamicCategories = [] } = useQuery<ExpenseCategory[]>({ queryKey: ["/api/expense-categories"] });
+  // RDV payés en dépense : intégrés dans cet onglet (type d'activité = RDV).
+  const { data: appointments = [] } = useQuery<Appointment[]>({ queryKey: ["/api/appointments"] });
 
   const categories = dynamicCategories.length > 0
     ? Array.from(new Set(dynamicCategories.map(c => c.name)))
@@ -374,6 +376,36 @@ export function Expenses() {
     onError: () => toast({ title: t("Erreur lors de la suppression", "Deletion error"), variant: "destructive" }),
   });
 
+  // Convertit les RDV payés en dépense en lignes virtuelles affichables.
+  // Le type d'activité (RDV) est marqué via __source = "appointment" et la
+  // catégorie d'affichage "Rendez-vous" — non éditables/non supprimables ici
+  // (les RDV se gèrent depuis l'agenda).
+  const apptExpenses = appointments
+    .filter(a => a.direction === "expense" && a.status === "paid" && a.amount != null)
+    .map(a => {
+      const amt = parseFloat(a.amount as any);
+      const date = (a.paidAt || a.startDate) as any;
+      return {
+        id: -Math.abs(a.id),
+        applicationId: (a as any).applicationId,
+        description: a.title,
+        category: "Rendez-vous",
+        supplierName: a.location || null,
+        paymentMethod: null as any,
+        amount: amt,
+        total: amt,
+        vatRate: 0,
+        vatAmount: 0,
+        status: "paid",
+        date,
+        dueDate: null as any,
+        notes: a.notes,
+        attachmentPath: (a as any).attachmentPath,
+        attachmentName: (a as any).attachmentName,
+        __source: "appointment" as const,
+      } as any;
+    });
+
   const resolvedList = list.map(e => {
     if (e.status === "unpaid" && e.dueDate && new Date(e.dueDate) < new Date()) {
       return { ...e, status: "overdue" };
@@ -381,16 +413,18 @@ export function Expenses() {
     return e;
   });
 
-  const filtered = resolvedList.filter(e => {
+  const merged = [...resolvedList, ...apptExpenses];
+
+  const filtered = merged.filter(e => {
     const matchStatus = filterStatus === "all" || e.status === filterStatus;
     const matchCat = filterCat === "all" || e.category === filterCat;
     return matchStatus && matchCat;
   });
 
-  const totalPaid = resolvedList.filter(e => e.status === "paid").reduce((s, e) => s + parseFloat(e.total as any), 0);
-  const totalUnpaid = resolvedList.filter(e => e.status === "unpaid").reduce((s, e) => s + parseFloat(e.total as any), 0);
-  const totalOverdue = resolvedList.filter(e => e.status === "overdue").reduce((s, e) => s + parseFloat(e.total as any), 0);
-  const totalAll = resolvedList.reduce((s, e) => s + parseFloat(e.total as any), 0);
+  const totalPaid = merged.filter(e => e.status === "paid").reduce((s, e) => s + parseFloat(e.total as any), 0);
+  const totalUnpaid = merged.filter(e => e.status === "unpaid").reduce((s, e) => s + parseFloat(e.total as any), 0);
+  const totalOverdue = merged.filter(e => e.status === "overdue").reduce((s, e) => s + parseFloat(e.total as any), 0);
+  const totalAll = merged.reduce((s, e) => s + parseFloat(e.total as any), 0);
 
   return (
     <div className="space-y-6 pb-8">
@@ -441,10 +475,10 @@ export function Expenses() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: t("Total", "Total"),          value: `${totalAll.toFixed(2)} €`,     color: "text-foreground",    count: resolvedList.length },
-          { label: t("Payées", "Paid"),           value: `${totalPaid.toFixed(2)} €`,    color: "text-green-500",     count: resolvedList.filter(e => e.status === "paid").length },
-          { label: t("À payer", "Unpaid"),        value: `${totalUnpaid.toFixed(2)} €`,  color: "text-yellow-500",    count: resolvedList.filter(e => e.status === "unpaid").length },
-          { label: t("En retard", "Overdue"),     value: `${totalOverdue.toFixed(2)} €`, color: "text-red-500",       count: resolvedList.filter(e => e.status === "overdue").length },
+          { label: t("Total", "Total"),          value: `${totalAll.toFixed(2)} €`,     color: "text-foreground",    count: merged.length },
+          { label: t("Payées", "Paid"),           value: `${totalPaid.toFixed(2)} €`,    color: "text-green-500",     count: merged.filter(e => e.status === "paid").length },
+          { label: t("À payer", "Unpaid"),        value: `${totalUnpaid.toFixed(2)} €`,  color: "text-yellow-500",    count: merged.filter(e => e.status === "unpaid").length },
+          { label: t("En retard", "Overdue"),     value: `${totalOverdue.toFixed(2)} €`, color: "text-red-500",       count: merged.filter(e => e.status === "overdue").length },
         ].map(k => (
           <Card key={k.label} className="glass-card">
             <CardContent className="p-4">
@@ -546,24 +580,35 @@ export function Expenses() {
           const cfg = STATUS_MAP[exp.status] ?? STATUS_MAP.unpaid;
           const Icon = cfg.icon;
           const payMethod = exp.paymentMethod ? PAYMENT_METHODS[exp.paymentMethod]?.label ?? exp.paymentMethod : null;
+          const isAppt = (exp as any).__source === "appointment";
+          const realApptId = isAppt ? Math.abs(exp.id) : null;
           return (
             <div
-              key={exp.id}
+              key={isAppt ? `appt-${realApptId}` : exp.id}
               className="flex items-center justify-between p-4 rounded-xl border border-border/50 bg-card/50 hover:bg-card/80 transition-colors"
-              data-testid={`row-expense-${exp.id}`}
+              data-testid={isAppt ? `row-appointment-expense-${realApptId}` : `row-expense-${exp.id}`}
             >
               <div className="flex items-center gap-3 min-w-0">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                  isAppt ? "bg-pink-500/10" :
                   exp.status === "paid" ? "bg-green-500/10" : exp.status === "overdue" ? "bg-red-500/10" : "bg-yellow-500/10"
                 }`}>
-                  <Icon className={`w-5 h-5 ${
-                    exp.status === "paid" ? "text-green-500" : exp.status === "overdue" ? "text-red-500" : "text-yellow-500"
-                  }`} />
+                  {isAppt
+                    ? <Calendar className="w-5 h-5 text-pink-400" />
+                    : <Icon className={`w-5 h-5 ${
+                        exp.status === "paid" ? "text-green-500" : exp.status === "overdue" ? "text-red-500" : "text-yellow-500"
+                      }`} />}
                 </div>
                 <div className="min-w-0">
                   <div className="font-semibold truncate">{exp.description}</div>
                   <div className="text-xs text-muted-foreground flex flex-wrap gap-2 mt-0.5">
-                    <span>{exp.category}</span>
+                    {isAppt && (
+                      <Badge variant="outline" className="text-[10px] border-pink-400/40 text-pink-400 bg-pink-500/10 px-1.5 py-0 gap-1">
+                        <Calendar className="w-2.5 h-2.5" />
+                        {t("Type d'activité : RDV", "Activity type: Appointment")}
+                      </Badge>
+                    )}
+                    {!isAppt && <span>{exp.category}</span>}
                     {exp.supplierName && <span>· {exp.supplierName}</span>}
                     {payMethod && <span>· {payMethod}</span>}
                     <span>· {format(new Date(exp.date!), "dd MMM yyyy", { locale })}</span>
@@ -578,33 +623,45 @@ export function Expenses() {
               <div className="flex items-center gap-3 flex-shrink-0 ml-2">
                 <div className="text-right hidden sm:block">
                   <div className="font-bold">{parseFloat(exp.total as any).toFixed(2)} €</div>
-                  <div className="text-xs text-muted-foreground">HT: {parseFloat(exp.amount as any).toFixed(2)} €</div>
+                  {!isAppt && (
+                    <div className="text-xs text-muted-foreground">HT: {parseFloat(exp.amount as any).toFixed(2)} €</div>
+                  )}
                 </div>
                 <Badge className={`${cfg.color} text-xs hidden md:flex border items-center gap-1`}>
                   <Icon className="w-3 h-3" />
                   {t(cfg.label, cfg.labelEn)}
                 </Badge>
                 <div className="flex gap-1 items-center">
-                  <AttachmentButton
-                    linkEndpoint={`/api/expenses/${exp.id}/attachment`}
-                    currentPath={(exp as any).attachmentPath}
-                    currentName={(exp as any).attachmentName}
-                    onUploaded={() => qc.invalidateQueries({ queryKey: ["/api/expenses"] })}
-                    size="icon"
-                    variant="ghost"
-                  />
-                  <Button variant="ghost" size="sm" onClick={() => { setEditing(list.find(e => e.id === exp.id) ?? exp); setOpen(true); }} data-testid={`button-edit-expense-${exp.id}`}>
-                    <Edit className="w-3.5 h-3.5" />
-                  </Button>
-                  <ConfirmDelete
-                    onConfirm={() => deleteMutation.mutate(exp.id)}
-                    isPending={deleteMutation.isPending}
-                    description={t(
-                      `Supprimer la dépense « ${exp.description} » (${parseFloat(exp.total as any).toFixed(2)} €) ? Cette action est irréversible.`,
-                      `Delete expense "${exp.description}" (${parseFloat(exp.total as any).toFixed(2)} €)? This cannot be undone.`
-                    )}
-                    testId={`button-delete-expense-${exp.id}`}
-                  />
+                  {isAppt ? (
+                    <Link href="/agenda">
+                      <Button variant="ghost" size="sm" data-testid={`button-open-agenda-${realApptId}`} title={t("Gérer dans l'agenda", "Manage in agenda")}>
+                        <Edit className="w-3.5 h-3.5" />
+                      </Button>
+                    </Link>
+                  ) : (
+                    <>
+                      <AttachmentButton
+                        linkEndpoint={`/api/expenses/${exp.id}/attachment`}
+                        currentPath={(exp as any).attachmentPath}
+                        currentName={(exp as any).attachmentName}
+                        onUploaded={() => qc.invalidateQueries({ queryKey: ["/api/expenses"] })}
+                        size="icon"
+                        variant="ghost"
+                      />
+                      <Button variant="ghost" size="sm" onClick={() => { setEditing(list.find(e => e.id === exp.id) ?? exp); setOpen(true); }} data-testid={`button-edit-expense-${exp.id}`}>
+                        <Edit className="w-3.5 h-3.5" />
+                      </Button>
+                      <ConfirmDelete
+                        onConfirm={() => deleteMutation.mutate(exp.id)}
+                        isPending={deleteMutation.isPending}
+                        description={t(
+                          `Supprimer la dépense « ${exp.description} » (${parseFloat(exp.total as any).toFixed(2)} €) ? Cette action est irréversible.`,
+                          `Delete expense "${exp.description}" (${parseFloat(exp.total as any).toFixed(2)} €)? This cannot be undone.`
+                        )}
+                        testId={`button-delete-expense-${exp.id}`}
+                      />
+                    </>
+                  )}
                 </div>
               </div>
             </div>
