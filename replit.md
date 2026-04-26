@@ -107,6 +107,7 @@ Tous les fichiers (transactions, dépenses, factures, factures fournisseur, rend
 
 - Root-level `/shared` directory shared by api-server, budget-pwa and budget-mobile
 - Registered in `pnpm-workspace.yaml` as private workspace package `@mytools/shared@1.0.0`
+- Deps: `drizzle-orm` (catalog), `zod` (catalog) — symlinked into `shared/node_modules` by pnpm
 - Layout: `types/`, `schemas/`, `lib/`, `constants/`, `utils/`
 - Imported via the **`@mytools/shared/*`** path alias (e.g. `import { calculateCA } from "@mytools/shared/lib/ca"`)
 - **Zero-regression contract**: the legacy per-artifact `@shared/*` alias (which still resolves `@shared/schema` and `@shared/routes` to each artifact's own local `shared/` folder) is left **completely untouched**. The two namespaces never collide.
@@ -115,6 +116,21 @@ Tous les fichiers (transactions, dépenses, factures, factures fournisseur, rend
   - Vite (PWA): `resolve.alias` entry in `artifacts/budget-pwa/vite.config.ts`
   - Metro (Expo mobile): custom `resolver.resolveRequest` + `watchFolders` in `artifacts/budget-mobile/metro.config.js`
   - api-server tsconfig has `rootDir` removed (typecheck-only config; build uses `esbuild` via `build.mjs`) so files outside `src/` (in `/shared`) can be type-checked.
+
+### Accounting domain (`@mytools/shared/schemas/accounting`)
+
+- New Drizzle schema for the cleaned-up accounting model (Étape 2)
+- **All tables and enums live under a dedicated Postgres schema namespace `accounting`** via `pgSchema('accounting')` so they cannot collide with the legacy `public.accounts` / `public.invoices` / `public.payments` defined in `artifacts/api-server/src/shared/schema.ts`
+- Tables: `accounts`, `transactions`, `invoices`, `bills`, `payments` — physically `accounting.accounts`, `accounting.transactions`, …
+- Enums: `transaction_type`, `invoice_status`, `tva_rate` (Maroc: 0/7/10/14/20), `payment_method`
+- Drizzle relations defined for all FKs (`accounts ↔ transactions`, `transactions ↔ payments`, `invoices/bills ↔ payments`, `transactions ↔ invoices/bills`)
+- Inferred TypeScript types exported (`Account`, `NewAccount`, `Transaction`, `NewTransaction`, …)
+- Zod schemas exported for validation: `AccountSchema`, `TransactionSchema`, `InvoiceSchema`, `BillSchema`, `PaymentSchema` (+ `*Input` helper types)
+- Étape 3 will register this file in `artifacts/api-server/drizzle.config.ts` so `db:push` issues `CREATE SCHEMA accounting` and creates the new tables alongside the legacy ones.
+
+### Shared business logic (`@mytools/shared/lib/ca`)
+
+- `calculateCA(transactions, start, end)` — sums `income` transactions in `[start, end]`. Accepts any object shaped like `{ type, amount, dateOperation }` (rows from drizzle, JSON payloads, etc.).
 
 ## Notes
 
