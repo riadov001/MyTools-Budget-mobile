@@ -861,6 +861,8 @@ importers:
         specifier: 'catalog:'
         version: 4.21.0
 
+  shared: {}
+
 packages:
 
   '@0no-co/graphql.web@1.2.0':

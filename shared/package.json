@@ -1,0 +1,7 @@
+{
+  "name": "@mytools/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared cross-artifact code for MyTools-Budget (types, zod schemas, drizzle schemas, lib, constants, utils). Imported via the @mytools/shared/* path alias."
+}

@@ -15,6 +15,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
+      "@mytools/shared/*": ["../../shared/*"],
       "@shared/*": ["shared/*"],
       "@assets/*": ["attached_assets/*"]
     }

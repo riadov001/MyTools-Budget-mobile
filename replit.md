@@ -23,6 +23,7 @@ pnpm monorepo with one shared Express backend serving a React Native Expo mobile
 - **Two frontends**:
   - `artifacts/budget-pwa` — React + Vite PWA at port 5173, preview path `/budget-pwa/`
   - `artifacts/budget-mobile` — Expo (React Native) at port 19496, accessed via Expo Go QR code
+- **Shared cross-artifact code**: `/shared` (workspace package `@mytools/shared`) — see *Shared folder* section below
 
 ## Workflows
 
@@ -101,6 +102,19 @@ Tous les fichiers (transactions, dépenses, factures, factures fournisseur, rend
 - **Helper serveur**: `ObjectStorageService.uploadBuffer(buffer, contentType)` (utilisé par OCR)
 - **Composant PWA réutilisable**: `<AttachmentButton linkEndpoint="..." currentPath onUploaded />` — input file caché, lien vers la pièce jointe existante, libellé "Joindre"/"Remplacer"
 - **Servir les fichiers**: `GET /objects/*` (déjà câblé par `registerObjectStorageRoutes`)
+
+## Shared folder (`@mytools/shared`)
+
+- Root-level `/shared` directory shared by api-server, budget-pwa and budget-mobile
+- Registered in `pnpm-workspace.yaml` as private workspace package `@mytools/shared@1.0.0`
+- Layout: `types/`, `schemas/`, `lib/`, `constants/`, `utils/`
+- Imported via the **`@mytools/shared/*`** path alias (e.g. `import { calculateCA } from "@mytools/shared/lib/ca"`)
+- **Zero-regression contract**: the legacy per-artifact `@shared/*` alias (which still resolves `@shared/schema` and `@shared/routes` to each artifact's own local `shared/` folder) is left **completely untouched**. The two namespaces never collide.
+- Wiring per tool:
+  - TypeScript (all): `paths` in `tsconfig.base.json` and per-artifact `tsconfig.json`
+  - Vite (PWA): `resolve.alias` entry in `artifacts/budget-pwa/vite.config.ts`
+  - Metro (Expo mobile): custom `resolver.resolveRequest` + `watchFolders` in `artifacts/budget-mobile/metro.config.js`
+  - api-server tsconfig has `rootDir` removed (typecheck-only config; build uses `esbuild` via `build.mjs`) so files outside `src/` (in `/shared`) can be type-checked.
 
 ## Notes
 
