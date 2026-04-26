@@ -1,5 +1,6 @@
 import { ReactNode, useState } from "react";
 import { AppSidebar } from "./app-sidebar";
+import { HelpLauncher } from "@/components/help/help-launcher";
 import { useAuth } from "@/hooks/use-auth";
 import { useAppContext } from "@/hooks/use-app-context";
 import { useQuery } from "@tanstack/react-query";
@@ -226,6 +227,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
           )}
         </div>
       </div>
+
+      {/* Floating help launcher (visible on every page) */}
+      <HelpLauncher />
     </div>
   );
 }

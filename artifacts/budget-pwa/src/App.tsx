@@ -34,6 +34,7 @@ import { Banking } from "@/pages/banking";
 import { RootAdmin } from "@/pages/root-admin";
 import { Urssaf } from "@/pages/urssaf";
 import { Accounting } from "@/pages/accounting";
+import { Help } from "@/pages/help";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   const { user, isLoading } = useAuth();
@@ -80,6 +81,7 @@ function Router() {
       <Route path="/urssaf"><ProtectedRoute component={Urssaf} /></Route>
       <Route path="/accounting"><ProtectedRoute component={Accounting} /></Route>
       <Route path="/ocr-scan"><ProtectedRoute component={OcrScanPage} /></Route>
+      <Route path="/help"><ProtectedRoute component={Help} /></Route>
       <Route><Redirect to="/" /></Route>
     </Switch>
   );

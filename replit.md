@@ -132,6 +132,31 @@ Tous les fichiers (transactions, dépenses, factures, factures fournisseur, rend
 
 - `calculateCA(transactions, start, end)` — sums `income` transactions in `[start, end]`. Accepts any object shaped like `{ type, amount, dateOperation }` (rows from drizzle, JSON payloads, etc.).
 
+## PWA Help & Onboarding system
+
+A complete in-app documentation, onboarding tour, and contextual help system added without touching any existing module page.
+
+### Files
+- **`artifacts/budget-pwa/src/lib/modules-catalog.ts`** — single source of truth for all module metadata (22 modules, 7 groups). Each entry has: route, group, icon, bilingual title/tagline/description, list of features and how-to steps, optional role gating, `isNew` flag. Also exports `GLOSSARY` (12 accounting terms FR/EN) and `FAQ` (8 common questions FR/EN), and `QUICK_START` (5-step onboarding).
+- **`artifacts/budget-pwa/src/components/help/guided-tour.tsx`** — reusable interactive spotlight overlay using React portal. Detects DOM targets by selector, draws a 4-div backdrop with cutout + red ring around the highlighted element, displays a positioned card with title/body/progress dots/Précédent/Suivant/Terminer. Keyboard nav (←/→/Esc). Persists completion in `localStorage` under `mytools-tour-completed-v1`. Exports `DEFAULT_TOUR_STEPS` (7 steps covering Dashboard, Invoices, OCR, Payments, Accounting, Analytics, Help).
+- **`artifacts/budget-pwa/src/components/help/help-launcher.tsx`** — floating circular `?` button (bottom-right, fixed z-40) mounted globally in `app-layout.tsx`. Expands to a mini-menu with "Visite guidée" and "Centre d'aide" entries. Auto-launches the tour on first login (controlled by `shouldAutoStartTour()`).
+- **`artifacts/budget-pwa/src/pages/help.tsx`** — full Help Center page at route `/help` with 4 tabs:
+  1. **Démarrer** — overview cards (Pour qui / Ce qu'il fait / Niveau pro), the 5-step quick-start with "Y aller" buttons, and a CTA card to launch the tour.
+  2. **Modules** — filterable grid (chips per group, role-aware) of 22 modules; each card expands to show description + features + how-to + "Ouvrir le module" button.
+  3. **Glossaire** — accordion of accounting terms (CA, TVA, HT/TTC, partie double, lettrage, bilan, P&L, URSSAF, FEC, DSP2, OCR, Avoir).
+  4. **FAQ** — accordion of common questions.
+  - Top-level search box filters across modules / glossary / FAQ depending on the active tab.
+
+### Sidebar enhancements (`app-sidebar.tsx`)
+- Added **Radix tooltip** on every nav item showing the bilingual title + tagline (delay 400 ms, side="right").
+- Added a new bottom group **"Aide & Support"** containing the `/help` entry.
+- Added a **"Lancer la visite guidée"** button right under the user badge (red gradient).
+- Added a green **NEW** badge support per item (currently on "Module Comptabilité").
+- All existing groups, items, order, role-gating, and tests-ids preserved.
+
+### Route registered
+- `/help` → `Help` component, behind `ProtectedRoute` (auth required, same as every other module).
+
 ## Notes
 
 - `sharp` is loaded dynamically — OCR falls back to raw images if sharp isn't built

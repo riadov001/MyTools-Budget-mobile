@@ -4,19 +4,23 @@ import {
   LayoutDashboard, FileText, ShoppingCart, CreditCard, RotateCcw,
   Receipt, BookOpen, List, Users, Settings, LogOut, Building2,
   Wallet, ChevronDown, Package, KeyRound, Calendar, BarChart3,
-  Landmark, ShieldAlert, Calculator, ScanLine
+  Landmark, ShieldAlert, Calculator, ScanLine, HelpCircle, Sparkles,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { AppContext } from "@/hooks/app-context";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { GuidedTour, DEFAULT_TOUR_STEPS, markTourCompleted } from "@/components/help/guided-tour";
 
 type NavItem = {
   title: string;
   titleEn: string;
   url: string;
   icon: React.ElementType;
+  description?: string;
+  descriptionEn?: string;
+  isNew?: boolean;
 };
 
 type NavGroup = {
@@ -55,6 +59,7 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [tourOpen, setTourOpen] = useState(false);
   const lang = user?.language ?? "fr";
   const t = (fr: string, en: string) => lang === "en" ? en : fr;
 
@@ -63,9 +68,15 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
       label: "Vue générale",
       labelEn: "Overview",
       items: [
-        { title: "Tableau de Bord", titleEn: "Dashboard", url: "/", icon: LayoutDashboard },
-        { title: "Analyses avancées", titleEn: "Advanced Analytics", url: "/analytics", icon: BarChart3 },
-        { title: "Agenda", titleEn: "Agenda", url: "/agenda", icon: Calendar },
+        { title: "Tableau de Bord", titleEn: "Dashboard", url: "/", icon: LayoutDashboard,
+          description: "Vue d'ensemble en temps réel : CA, dépenses, trésorerie, alertes.",
+          descriptionEn: "Real-time overview: revenue, expenses, cash, alerts." },
+        { title: "Analyses avancées", titleEn: "Advanced Analytics", url: "/analytics", icon: BarChart3,
+          description: "Rapports détaillés, top clients, tendances et exports PDF/Excel.",
+          descriptionEn: "Detailed reports, top clients, trends and PDF/Excel exports." },
+        { title: "Agenda", titleEn: "Agenda", url: "/agenda", icon: Calendar,
+          description: "Planning unifié : rendez-vous, échéances, abonnements.",
+          descriptionEn: "Unified planning: appointments, deadlines, subscriptions." },
       ],
     },
     {
@@ -73,9 +84,15 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
       labelEn: "Sales",
       collapsible: true,
       items: [
-        { title: "Factures clients", titleEn: "Invoices", url: "/invoices", icon: FileText },
-        { title: "Avoirs", titleEn: "Credit Notes", url: "/credit-notes", icon: RotateCcw },
-        { title: "Clients", titleEn: "Clients", url: "/clients", icon: Users },
+        { title: "Factures clients", titleEn: "Client Invoices", url: "/invoices", icon: FileText,
+          description: "Créez, envoyez et suivez vos factures de vente.",
+          descriptionEn: "Create, send and track your sales invoices." },
+        { title: "Avoirs", titleEn: "Credit Notes", url: "/credit-notes", icon: RotateCcw,
+          description: "Remboursements et corrections de factures.",
+          descriptionEn: "Refunds and invoice corrections." },
+        { title: "Clients", titleEn: "Clients", url: "/clients", icon: Users,
+          description: "Carnet d'adresses et historique commercial.",
+          descriptionEn: "Address book and commercial history." },
       ],
     },
     {
@@ -83,10 +100,18 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
       labelEn: "Purchases",
       collapsible: true,
       items: [
-        { title: "Factures fournisseurs", titleEn: "Supplier Invoices", url: "/supplier-invoices", icon: ShoppingCart },
-        { title: "Dépenses", titleEn: "Expenses", url: "/expenses", icon: Receipt },
-        { title: "Scan OCR", titleEn: "OCR Scan", url: "/ocr-scan", icon: ScanLine },
-        { title: "Fournisseurs", titleEn: "Suppliers", url: "/suppliers", icon: Package },
+        { title: "Factures fournisseurs", titleEn: "Supplier Invoices", url: "/supplier-invoices", icon: ShoppingCart,
+          description: "Saisie et suivi des factures reçues.",
+          descriptionEn: "Capture and track received invoices." },
+        { title: "Dépenses", titleEn: "Expenses", url: "/expenses", icon: Receipt,
+          description: "Notes de frais et petits achats du quotidien.",
+          descriptionEn: "Expense reports and daily small purchases." },
+        { title: "Scan OCR", titleEn: "OCR Scan", url: "/ocr-scan", icon: ScanLine,
+          description: "Numérisation IA : Gemini & Mindee extraient les données.",
+          descriptionEn: "AI scanning: Gemini & Mindee extract the data." },
+        { title: "Fournisseurs", titleEn: "Suppliers", url: "/suppliers", icon: Package,
+          description: "Annuaire fournisseurs et conditions négociées.",
+          descriptionEn: "Supplier directory and negotiated terms." },
       ],
     },
     {
@@ -94,9 +119,15 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
       labelEn: "Treasury",
       collapsible: true,
       items: [
-        { title: "Paiements", titleEn: "Payments", url: "/payments", icon: CreditCard },
-        { title: "Abonnements SaaS", titleEn: "SaaS Services", url: "/services", icon: Wallet },
-        { title: "Open Banking", titleEn: "Open Banking", url: "/banking", icon: Landmark },
+        { title: "Paiements", titleEn: "Payments", url: "/payments", icon: CreditCard,
+          description: "Encaissements, décaissements et lettrage automatique.",
+          descriptionEn: "Incoming, outgoing and automatic matching." },
+        { title: "Abonnements SaaS", titleEn: "SaaS Subscriptions", url: "/services", icon: Wallet,
+          description: "Pilotez vos abonnements logiciels récurrents.",
+          descriptionEn: "Monitor your recurring software subscriptions." },
+        { title: "Open Banking", titleEn: "Open Banking", url: "/banking", icon: Landmark,
+          description: "Connexion DSP2 sécurisée à vos comptes bancaires.",
+          descriptionEn: "Secure PSD2 connection to your bank accounts." },
       ],
     },
     {
@@ -104,27 +135,56 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
       labelEn: "Accounting",
       collapsible: true,
       items: [
-        { title: "Module Comptabilité", titleEn: "Accounting Module", url: "/accounting", icon: BookOpen },
-        { title: "Journal des écritures", titleEn: "Journal Entries", url: "/journal", icon: List },
-        { title: "Plan comptable", titleEn: "Chart of Accounts", url: "/accounts", icon: List },
-        { title: "URSSAF & Impôts", titleEn: "URSSAF & Taxes", url: "/urssaf", icon: Calculator },
+        { title: "Module Comptabilité", titleEn: "Accounting Module", url: "/accounting", icon: BookOpen,
+          description: "Partie double, bilan et compte de résultat (niveau pro).",
+          descriptionEn: "Double-entry, balance sheet and P&L (pro grade).",
+          isNew: true },
+        { title: "Journal des écritures", titleEn: "Journal Entries", url: "/journal", icon: List,
+          description: "Toutes les écritures comptables chronologiques.",
+          descriptionEn: "All accounting entries in chronological order." },
+        { title: "Plan comptable", titleEn: "Chart of Accounts", url: "/accounts", icon: List,
+          description: "Structure des comptes selon le PCG (FR/MA).",
+          descriptionEn: "Chart of accounts following PCG (FR/MA)." },
+        { title: "URSSAF & Impôts", titleEn: "URSSAF & Taxes", url: "/urssaf", icon: Calculator,
+          description: "Calcul des charges sociales et déclarations fiscales.",
+          descriptionEn: "Social charges computation and tax filings." },
       ],
     },
     {
       label: "Administration",
       labelEn: "Administration",
+      collapsible: true,
       items: [
-        { title: "Utilisateurs", titleEn: "Users", url: "/users", icon: Users },
-        { title: "Paramètres", titleEn: "Settings", url: "/settings", icon: Settings },
+        { title: "Utilisateurs", titleEn: "Users", url: "/users", icon: Users,
+          description: "Gestion des accès et des rôles.",
+          descriptionEn: "Access and role management." },
+        { title: "Paramètres", titleEn: "Settings", url: "/settings", icon: Settings,
+          description: "Profil, langue, intégrations et sauvegarde.",
+          descriptionEn: "Profile, language, integrations and backup." },
         ...(user?.role === "SUPER_ADMIN" || user?.role === "ROOT_ADMIN"
           ? [
-              { title: "Applications", titleEn: "Applications", url: "/applications", icon: Building2 },
-              { title: "Gestion API", titleEn: "API Manager", url: "/api-manager", icon: KeyRound },
+              { title: "Applications", titleEn: "Applications", url: "/applications", icon: Building2,
+                description: "Multi-entreprises sous un même compte.",
+                descriptionEn: "Multi-business under one account." },
+              { title: "Gestion API", titleEn: "API Manager", url: "/api-manager", icon: KeyRound,
+                description: "Clés API et intégrations externes.",
+                descriptionEn: "API keys and external integrations." },
             ]
           : []),
         ...(user?.role === "ROOT_ADMIN"
-          ? [{ title: "Super Dashboard", titleEn: "Super Dashboard", url: "/root-admin", icon: ShieldAlert }]
+          ? [{ title: "Super Dashboard", titleEn: "Super Dashboard", url: "/root-admin", icon: ShieldAlert,
+              description: "Console technique réservée au ROOT_ADMIN.",
+              descriptionEn: "Technical console reserved for ROOT_ADMIN." }]
           : []),
+      ],
+    },
+    {
+      label: "Aide & Support",
+      labelEn: "Help & Support",
+      items: [
+        { title: "Centre d'aide", titleEn: "Help Center", url: "/help", icon: HelpCircle,
+          description: "Documentation interactive de tous les modules.",
+          descriptionEn: "Interactive documentation of all modules." },
       ],
     },
   ];
@@ -174,6 +234,21 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
             <div className="text-[10px] truncate mt-1 font-medium" style={{ color: "hsl(0 0% 45%)" }}>{user?.email}</div>
           </div>
         </div>
+
+        {/* Quick tour button */}
+        <button
+          onClick={() => setTourOpen(true)}
+          className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs font-semibold transition-all"
+          style={{
+            background: "linear-gradient(135deg, rgba(220,38,38,0.18), rgba(220,38,38,0.08))",
+            border: "1px solid rgba(220,38,38,0.30)",
+            color: "#fca5a5",
+          }}
+          data-testid="button-launch-tour"
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          {t("Lancer la visite guidée", "Start guided tour")}
+        </button>
       </div>
 
       {/* Navigation */}
@@ -204,8 +279,9 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
                 <div className="space-y-0.5">
                   {group.items.map((item) => {
                     const isActive = location === item.url;
-                    return (
-                      <Link key={item.url} href={item.url} onClick={() => onClose?.()}>
+                    const desc = item.description ? t(item.description, item.descriptionEn ?? item.description) : null;
+                    const link = (
+                      <Link href={item.url} onClick={() => onClose?.()}>
                         <div
                           data-testid={`nav-${item.url.replace("/", "") || "home"}`}
                           className={cn(
@@ -232,9 +308,25 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
                           }}
                         >
                           <item.icon className="w-4 h-4 flex-shrink-0" />
-                          <span className="truncate">{t(item.title, item.titleEn)}</span>
+                          <span className="truncate flex-1">{t(item.title, item.titleEn)}</span>
+                          {item.isNew && (
+                            <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 border border-green-500/30 uppercase tracking-wider flex-shrink-0">
+                              New
+                            </span>
+                          )}
                         </div>
                       </Link>
+                    );
+                    return desc ? (
+                      <Tooltip key={item.url} delayDuration={400}>
+                        <TooltipTrigger asChild>{link}</TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-[260px] bg-zinc-900 border-zinc-700 text-zinc-200">
+                          <div className="font-semibold text-xs mb-0.5">{t(item.title, item.titleEn)}</div>
+                          <div className="text-[11px] leading-snug text-zinc-400">{desc}</div>
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <div key={item.url}>{link}</div>
                     );
                   })}
                 </div>
@@ -264,6 +356,13 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
           <span>{t("Déconnexion", "Sign Out")}</span>
         </button>
       </div>
+
+      <GuidedTour
+        steps={DEFAULT_TOUR_STEPS}
+        open={tourOpen}
+        onClose={() => setTourOpen(false)}
+        onComplete={markTourCompleted}
+      />
     </aside>
   );
 }
