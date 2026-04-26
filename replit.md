@@ -157,6 +157,42 @@ A complete in-app documentation, onboarding tour, and contextual help system add
 ### Route registered
 - `/help` → `Help` component, behind `ProtectedRoute` (auth required, same as every other module).
 
+## Sidebar reorganization — Opérations clients / internes / fournisseurs
+
+The sidebar groups are now separated by **counterparty type**, not by accounting category:
+
+| Group | Counterparty | Modules |
+|---|---|---|
+| **Opérations clients** | External clients | Factures clients, Avoirs, Encaissements, Clients |
+| **Opérations internes** | None (internal-only) | Journal des écritures, Plan comptable, URSSAF & Impôts, Abonnements SaaS |
+| **Opérations fournisseurs** | External suppliers | Factures fournisseurs, Dépenses, Scan OCR, Décaissements, Fournisseurs |
+| **Trésorerie** | Banks | Paiements & lettrage, Open Banking |
+| **Comptabilité** | (reporting) | Module Comptabilité |
+
+The `modules-catalog.ts` `ModuleGroup` type was extended with `"internal"` and group labels updated accordingly so the `/help` page reflects the same structure.
+
+## Agenda — `validated` status (RDV sans montant)
+
+A new fifth status `"validated"` (label "Validé") was added for appointments with **no monetary impact** (free RDV, internal meetings, deliverables). It works alongside the existing `pending`/`paid`/`overdue`/`cancelled` values — the column type is `text`, so no DB migration needed.
+
+- **Frontend** (`pages/agenda.tsx`):
+  - Status dropdown now offers: À faire / **Validé (sans montant)** / Payé / En retard / Annulé
+  - New `BadgeCheck` emerald icon + colored badge in the agenda lists
+  - Inline help block in the dialog explaining the difference between Validé (no money) and Payé (counts in CA)
+- **Backend** (`routes.ts`):
+  - `/api/agenda` no longer marks `validated` or `cancelled` appointments as overdue when the date is past
+  - `/api/analytics/dashboard` treats `validated` as a final state — only contributes money if `amount > 0` (normally false), preserving CA/expense totals integrity
+
+## Comprehensive CA — every monetary source feeds the dashboard
+
+`/api/analytics/dashboard` now sums revenue from **3 sources** (was 2) to ensure no transaction is missed:
+
+1. **Paid invoices** — `invoices.status === 'paid'` (legacy)
+2. **Paid/validated income appointments** — with `amount > 0` (legacy + new validated handling)
+3. **Orphan inbound payments** — `payments.direction === 'inbound' && invoiceId == null` (NEW — direct receipts not tied to an invoice were previously ignored in CA)
+
+Same logic mirrored on the expense side (orphan outbound payments). The endpoint now also returns a `revenueBreakdown` and `expenseBreakdown` object (`{ invoices, appointments, orphanPayments, total }`) so the dashboard can show users where their CA comes from. Invoice-linked payments are NOT double-counted — only orphans are added.
+
 ## Notes
 
 - `sharp` is loaded dynamically — OCR falls back to raw images if sharp isn't built

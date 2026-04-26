@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Calendar, ChevronLeft, ChevronRight, FileText, Receipt,
   CreditCard, Wallet, ShoppingCart, AlertTriangle, Clock, CheckCircle,
-  CalendarPlus, Upload, Trash2, Edit3, Link2,
+  CalendarPlus, Upload, Trash2, Edit3, Link2, BadgeCheck,
 } from "lucide-react";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isSameMonth, addMonths, subMonths, isToday, isBefore, isAfter } from "date-fns";
 import { fr as frLocale, enUS } from "date-fns/locale";
@@ -44,7 +44,7 @@ type Appointment = {
   externalUid: string | null;
   amount: string | null;
   direction: "income" | "expense";
-  status: "pending" | "paid" | "overdue" | "cancelled";
+  status: "pending" | "paid" | "validated" | "overdue" | "cancelled";
   paidAt: string | null;
   notes: string | null;
 };
@@ -60,6 +60,7 @@ const TYPE_CONFIG: Record<string, { label: string; labelEn: string; icon: React.
 
 const STATUS_ICONS: Record<string, { icon: React.ElementType; color: string }> = {
   paid: { icon: CheckCircle, color: "text-green-500" },
+  validated: { icon: BadgeCheck, color: "text-emerald-500" },
   completed: { icon: CheckCircle, color: "text-green-500" },
   active: { icon: Clock, color: "text-blue-400" },
   overdue: { icon: AlertTriangle, color: "text-red-500" },
@@ -414,8 +415,18 @@ export function Agenda() {
                         </div>
                         <div className="text-[10px] text-muted-foreground">{format(new Date(ap.startDate), "dd MMM HH:mm", { locale })}{ap.amount ? ` · ${ap.amount} €` : ""}</div>
                       </div>
-                      <Badge variant="outline" className={`text-[9px] ${ap.status === "paid" ? "text-green-500 border-green-500/30" : ap.status === "overdue" ? "text-red-500 border-red-500/30" : "text-yellow-500 border-yellow-500/30"}`}>
-                        {ap.status === "paid" ? t("Payé", "Paid") : ap.status === "overdue" ? t("Retard", "Overdue") : ap.status === "cancelled" ? t("Annulé", "Cancelled") : t("À faire", "Pending")}
+                      <Badge variant="outline" className={`text-[9px] ${
+                        ap.status === "paid" ? "text-green-500 border-green-500/30"
+                        : ap.status === "validated" ? "text-emerald-500 border-emerald-500/30"
+                        : ap.status === "overdue" ? "text-red-500 border-red-500/30"
+                        : ap.status === "cancelled" ? "text-gray-500 border-gray-500/30"
+                        : "text-yellow-500 border-yellow-500/30"
+                      }`}>
+                        {ap.status === "paid" ? t("Payé", "Paid")
+                          : ap.status === "validated" ? t("Validé", "Validated")
+                          : ap.status === "overdue" ? t("Retard", "Overdue")
+                          : ap.status === "cancelled" ? t("Annulé", "Cancelled")
+                          : t("À faire", "Pending")}
                       </Badge>
                       <AttachmentButton
                         linkEndpoint={`/api/appointments/${ap.id}/attachment`}
@@ -553,6 +564,7 @@ function AppointmentDialog({
                 <SelectTrigger data-testid="select-appt-status"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="pending">{t("À faire", "Pending")}</SelectItem>
+                  <SelectItem value="validated">{t("Validé (sans montant)", "Validated (no amount)")}</SelectItem>
                   <SelectItem value="paid">{t("Payé", "Paid")}</SelectItem>
                   <SelectItem value="overdue">{t("En retard", "Overdue")}</SelectItem>
                   <SelectItem value="cancelled">{t("Annulé", "Cancelled")}</SelectItem>
@@ -564,9 +576,16 @@ function AppointmentDialog({
             <Label htmlFor="appt-notes">{t("Notes", "Notes")}</Label>
             <Textarea id="appt-notes" rows={2} value={form.notes || ""} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="textarea-appt-notes" />
           </div>
-          <p className="text-xs text-muted-foreground">
-            {t("Les rendez-vous payés s'ajoutent automatiquement au CA (revenu) ou aux dépenses.", "Paid appointments are automatically added to revenue (income) or expenses.")}
-          </p>
+          <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-1">
+            <p>
+              <BadgeCheck className="inline w-3.5 h-3.5 mr-1 text-emerald-500" />
+              <strong>{t("Validé", "Validated")}</strong> — {t("RDV terminé sans impact financier (montant vide ou 0).", "Done appointment with no financial impact (amount empty or 0).")}
+            </p>
+            <p>
+              <CheckCircle className="inline w-3.5 h-3.5 mr-1 text-green-500" />
+              <strong>{t("Payé", "Paid")}</strong> — {t("Le montant s'ajoute automatiquement au CA ou aux dépenses.", "Amount is automatically added to revenue or expenses.")}
+            </p>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Annuler", "Cancel")}</Button>

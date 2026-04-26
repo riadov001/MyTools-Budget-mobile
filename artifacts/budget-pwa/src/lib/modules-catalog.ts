@@ -13,6 +13,7 @@ export type LocalizedString = { fr: string; en: string };
 export type ModuleGroup =
   | "overview"
   | "sales"
+  | "internal"
   | "purchases"
   | "treasury"
   | "accounting"
@@ -53,43 +54,53 @@ export const GROUPS: GroupMeta[] = [
   },
   {
     id: "sales",
-    label: { fr: "Ventes", en: "Sales" },
+    label: { fr: "Opérations clients", en: "Customer Operations" },
     description: {
-      fr: "Tout ce qui concerne vos clients : facturation, encaissements et avoirs.",
-      en: "Everything client-side: invoicing, collections and credit notes.",
+      fr: "Tout ce qui concerne vos clients : factures, encaissements, avoirs et carnet d'adresses.",
+      en: "Everything client-side: invoices, receipts, credit notes and address book.",
     },
     collapsible: true,
     order: 2,
   },
   {
-    id: "purchases",
-    label: { fr: "Achats", en: "Purchases" },
+    id: "internal",
+    label: { fr: "Opérations internes", en: "Internal Operations" },
     description: {
-      fr: "Gestion de vos dépenses et factures fournisseurs avec scan OCR intelligent.",
-      en: "Expense and supplier invoice management with AI-powered OCR scanning.",
+      fr: "Opérations sans tiers externe : journal manuel, plan comptable, charges sociales, abonnements SaaS.",
+      en: "Operations without external party: manual journal, chart of accounts, payroll, SaaS subscriptions.",
     },
     collapsible: true,
     order: 3,
   },
   {
-    id: "treasury",
-    label: { fr: "Trésorerie", en: "Treasury" },
+    id: "purchases",
+    label: { fr: "Opérations fournisseurs", en: "Supplier Operations" },
     description: {
-      fr: "Suivi des paiements, abonnements SaaS et connexion bancaire en temps réel.",
-      en: "Payments tracking, SaaS subscriptions and real-time banking connection.",
+      fr: "Gestion de vos dépenses, factures fournisseurs, décaissements et OCR intelligent.",
+      en: "Expense, supplier invoice, disbursement management with AI-powered OCR.",
     },
     collapsible: true,
     order: 4,
   },
   {
-    id: "accounting",
-    label: { fr: "Comptabilité", en: "Accounting" },
+    id: "treasury",
+    label: { fr: "Trésorerie", en: "Treasury" },
     description: {
-      fr: "Comptabilité partie double, journal des écritures, plan comptable et obligations fiscales.",
-      en: "Double-entry accounting, journal entries, chart of accounts and tax obligations.",
+      fr: "Vue unifiée des flux de trésorerie et connexion bancaire en temps réel.",
+      en: "Unified cash-flow view and real-time banking connection.",
     },
     collapsible: true,
     order: 5,
+  },
+  {
+    id: "accounting",
+    label: { fr: "Comptabilité", en: "Accounting" },
+    description: {
+      fr: "Bilan, compte de résultat et reporting comptable de niveau professionnel.",
+      en: "Balance sheet, P&L and professional-grade accounting reporting.",
+    },
+    collapsible: true,
+    order: 6,
   },
   {
     id: "admin",
@@ -99,7 +110,7 @@ export const GROUPS: GroupMeta[] = [
       en: "Configuration, users, applications and API access.",
     },
     collapsible: true,
-    order: 6,
+    order: 7,
   },
   {
     id: "help",
@@ -109,7 +120,7 @@ export const GROUPS: GroupMeta[] = [
       en: "Interactive help center, guided tour and module documentation.",
     },
     collapsible: false,
-    order: 7,
+    order: 8,
   },
 ];
 
@@ -393,7 +404,7 @@ export const MODULES: ModuleEntry[] = [
   },
   {
     route: "/services",
-    group: "treasury",
+    group: "internal",
     icon: Wallet,
     title: { fr: "Abonnements SaaS", en: "SaaS Subscriptions" },
     tagline: {
@@ -468,7 +479,7 @@ export const MODULES: ModuleEntry[] = [
   },
   {
     route: "/journal",
-    group: "accounting",
+    group: "internal",
     icon: List,
     title: { fr: "Journal des écritures", en: "Journal Entries" },
     tagline: {
@@ -492,7 +503,7 @@ export const MODULES: ModuleEntry[] = [
   },
   {
     route: "/accounts",
-    group: "accounting",
+    group: "internal",
     icon: List,
     title: { fr: "Plan comptable", en: "Chart of Accounts" },
     tagline: {
@@ -515,7 +526,7 @@ export const MODULES: ModuleEntry[] = [
   },
   {
     route: "/urssaf",
-    group: "accounting",
+    group: "internal",
     icon: Calculator,
     title: { fr: "URSSAF & Impôts", en: "URSSAF & Taxes" },
     tagline: {

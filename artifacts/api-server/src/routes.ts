@@ -771,20 +771,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return e;
     });
 
+    // Appointments: "paid" or "validated" with amount > 0 contribute to revenue/expense.
+    // "validated" is for amount-less / done events (e.g. free RDV) — usually no money impact.
+    const apptCountsForMoney = (a: any) =>
+      (a.status === "paid" || a.status === "validated") &&
+      a.amount != null && parseFloat(a.amount as any) > 0;
     const apptIncome = apptList
-      .filter(a => a.status === "paid" && a.direction === "income" && a.amount != null)
+      .filter(a => apptCountsForMoney(a) && a.direction === "income")
       .reduce((s, a) => s + parseFloat(a.amount as any), 0);
     const apptExpense = apptList
-      .filter(a => a.status === "paid" && a.direction === "expense" && a.amount != null)
+      .filter(a => apptCountsForMoney(a) && a.direction === "expense")
       .reduce((s, a) => s + parseFloat(a.amount as any), 0);
 
-    const totalRevenue = invList.filter(i => i.status === "paid").reduce((s, i) => s + parseFloat(i.total as any), 0) + apptIncome;
-    const totalExpenses = resolvedExpenses.reduce((s, e) => s + parseFloat(e.total as any), 0) + apptExpense;
+    // Orphan inbound payments — direct receipts NOT linked to an invoice (avoid double-count).
+    const orphanInbound = payList
+      .filter(p => p.direction === "inbound" && (p as any).invoiceId == null)
+      .reduce((s, p) => s + parseFloat(p.amount as any), 0);
+    const orphanOutbound = payList
+      .filter(p => p.direction === "outbound" && (p as any).invoiceId == null && (p as any).expenseId == null)
+      .reduce((s, p) => s + parseFloat(p.amount as any), 0);
+
+    const invoicesRevenue = invList.filter(i => i.status === "paid").reduce((s, i) => s + parseFloat(i.total as any), 0);
+    const totalRevenue = invoicesRevenue + apptIncome + orphanInbound;
+    const totalExpenses = resolvedExpenses.reduce((s, e) => s + parseFloat(e.total as any), 0) + apptExpense + orphanOutbound;
     const expensesPaid = resolvedExpenses.filter(e => e.status === "paid").reduce((s, e) => s + parseFloat(e.total as any), 0);
     const expensesUnpaid = resolvedExpenses.filter(e => e.status === "unpaid").reduce((s, e) => s + parseFloat(e.total as any), 0);
     const expensesOverdue = resolvedExpenses.filter(e => e.status === "overdue").reduce((s, e) => s + parseFloat(e.total as any), 0);
     const totalPaid = payList.filter(p => p.direction === "inbound").reduce((s, p) => s + parseFloat(p.amount as any), 0);
     const totalOutbound = payList.filter(p => p.direction === "outbound").reduce((s, p) => s + parseFloat(p.amount as any), 0);
+
+    // Detailed revenue breakdown — every monetary source feeding CA.
+    const revenueBreakdown = {
+      invoices: invoicesRevenue,
+      appointments: apptIncome,
+      orphanPayments: orphanInbound,
+      total: totalRevenue,
+    };
+    const expenseBreakdown = {
+      expenses: resolvedExpenses.reduce((s, e) => s + parseFloat(e.total as any), 0),
+      appointments: apptExpense,
+      orphanPayments: orphanOutbound,
+      total: totalExpenses,
+    };
     const pendingInvoices = invList.filter(i => i.status === "sent" || i.status === "overdue").length;
     const overdueInvoices = invList.filter(i => i.status === "overdue").length;
 
@@ -825,6 +853,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       expensesPaid, expensesUnpaid, expensesOverdue,
       pendingInvoices, overdueInvoices,
       invoiceCount: invList.length, expenseCount: resolvedExpenses.length,
+      revenueBreakdown, expenseBreakdown,
     });
   });
 
@@ -2033,7 +2062,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
 
     apptList.forEach(ap => {
-      const status = ap.status === "pending" && new Date(ap.startDate) < new Date() ? "overdue" : ap.status;
+      // "validated" is a final state (no money or done) — never overdue.
+      const isFinal = ap.status === "paid" || ap.status === "validated" || ap.status === "cancelled";
+      const status = !isFinal && ap.status === "pending" && new Date(ap.startDate) < new Date()
+        ? "overdue"
+        : ap.status;
       events.push({
         id: `appt-${ap.id}`,
         title: ap.title,
