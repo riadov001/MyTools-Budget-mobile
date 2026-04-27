@@ -105,31 +105,26 @@ let aiInstance: GoogleGenAI | null = null;
 function getAI(): GoogleGenAI | null {
   if (aiInstance) return aiInstance;
 
-  // Préférence : clé Google directe (plus fiable). Sinon, proxy Replit AI Integrations.
-  const directKey = process.env.GOOGLE_API_KEY;
-  if (directKey) {
-    aiInstance = new GoogleGenAI({ apiKey: directKey });
-    return aiInstance;
-  }
+  // OCR utilise UNIQUEMENT le proxy Replit AI Integrations Gemini.
+  // Toutes les autres clés (GOOGLE_API_KEY, GEMINI_API_KEY, MINDEE_*) sont ignorées.
+  const apiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY;
+  const baseUrl = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL;
+  if (!apiKey || !baseUrl) return null;
 
-  const integrationKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY;
-  if (!integrationKey) return null;
-
-  const config: ConstructorParameters<typeof GoogleGenAI>[0] = { apiKey: integrationKey };
-  if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
-    (config as Record<string, unknown>).httpOptions = {
-      apiVersion: "",
-      baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-    };
-  }
-  aiInstance = new GoogleGenAI(config);
+  aiInstance = new GoogleGenAI({
+    apiKey,
+    httpOptions: { apiVersion: "", baseUrl },
+  } as ConstructorParameters<typeof GoogleGenAI>[0]);
   return aiInstance;
 }
 
 export function getModel(): string {
-  // Avec la clé Google directe : gemini-2.0-flash. Avec le proxy : gemini-2.5-flash.
-  if (process.env.GOOGLE_API_KEY) return "gemini-2.0-flash";
-  return process.env.AI_INTEGRATIONS_GEMINI_BASE_URL ? "gemini-2.5-flash" : "gemini-2.0-flash";
+  // Modèle supporté par Replit AI Integrations.
+  return "gemini-2.5-flash";
+}
+
+export function resetAI(): void {
+  aiInstance = null;
 }
 
 const toNum = (v: unknown): number | undefined => {

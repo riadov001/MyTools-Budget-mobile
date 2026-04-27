@@ -1537,24 +1537,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/ocr/auto", authenticate, upload.single("file"), ar(async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "Aucun fichier fourni" });
-      const { scanInvoiceWithMindee } = await import("./services/mindee");
+      const docType = (req.body?.type as string) || "invoice";
       const storedPromise = saveOcrSourceToObjectStorage(req.file, req);
 
-      // Try Mindee first (mock or real)
-      try {
-        const result = await scanInvoiceWithMindee(req.file.buffer, req.file.originalname);
-        console.log(`[OCR Auto] ✓ Mindee succeeded, confidence=${result.confidence}`);
-        const stored = await storedPromise;
-        return res.json({ ...result, ...(stored ?? {}) });
-      } catch (mindeeErr) {
-        console.log(`[OCR Auto] Mindee failed, fallback to Gemini: ${mindeeErr instanceof Error ? mindeeErr.message : "unknown error"}`);
-      }
-
-      // Fallback to Gemini if Mindee fails
-      const docType = (req.body?.type as string) || "invoice";
+      // Direct Gemini Vision via Replit AI Integrations (Mindee retiré).
       const result = await analyzeDocument(req.file.buffer, req.file.originalname, docType);
       console.log(`[OCR Auto] ✓ Gemini succeeded, confidence=${result.confidence}`);
-      const stored = await storedPromise;
+      const stored = await storedPromise.catch(() => null);
       res.json({ ...result, ...(stored ?? {}) });
     } catch (e: unknown) {
       console.error("OCR Auto error:", e);
@@ -1616,20 +1605,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   }));
 
-  // ─── OCR DOCUMENT SCANNING (MINDEE) [LEGACY] ────────────────────────────
+  // ─── OCR DOCUMENT SCANNING (LEGACY ALIAS — Mindee retiré, redirige vers Gemini)
   app.post("/api/ocr/mindee", authenticate, upload.single("file"), ar(async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "Aucun fichier fourni" });
-      const { scanInvoiceWithMindee } = await import("./services/mindee");
+      const docType = (req.body?.type as string) || "invoice";
       const [result, stored] = await Promise.all([
-        scanInvoiceWithMindee(req.file.buffer, req.file.originalname),
-        saveOcrSourceToObjectStorage(req.file, req),
+        analyzeDocument(req.file.buffer, req.file.originalname, docType),
+        saveOcrSourceToObjectStorage(req.file, req).catch(() => null),
       ]);
       res.json({ ...result, ...(stored ?? {}) });
     } catch (e: unknown) {
-      console.error("Mindee OCR error:", e);
-      const message = e instanceof Error ? e.message : "Erreur Mindee";
-      res.status(500).json({ message });
+      console.error("OCR error:", e);
+      const status = e instanceof Error && "status" in e ? (e as { status: number }).status : 500;
+      const message = e instanceof Error ? e.message : "Erreur OCR";
+      res.status(status).json({ message });
     }
   }));
 
