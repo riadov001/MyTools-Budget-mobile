@@ -29,6 +29,7 @@ import { Suppliers } from "@/pages/suppliers";
 import { ApiManager } from "@/pages/api-manager";
 import { Agenda } from "@/pages/agenda";
 import OcrScanPage from "@/pages/ocr-scan";
+import ImportsPage from "@/pages/imports";
 import { AdvancedAnalytics } from "@/pages/advanced-analytics";
 import { Banking } from "@/pages/banking";
 import { RootAdmin } from "@/pages/root-admin";
@@ -81,6 +82,7 @@ function Router() {
       <Route path="/urssaf"><ProtectedRoute component={Urssaf} /></Route>
       <Route path="/accounting"><ProtectedRoute component={Accounting} /></Route>
       <Route path="/ocr-scan"><ProtectedRoute component={OcrScanPage} /></Route>
+      <Route path="/imports"><ProtectedRoute component={ImportsPage} /></Route>
       <Route path="/help"><ProtectedRoute component={Help} /></Route>
       <Route><Redirect to="/" /></Route>
     </Switch>

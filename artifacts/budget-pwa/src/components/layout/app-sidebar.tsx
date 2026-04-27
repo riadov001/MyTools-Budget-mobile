@@ -5,6 +5,7 @@ import {
   Receipt, BookOpen, List, Users, Settings, LogOut, Building2,
   Wallet, ChevronDown, Package, KeyRound, Calendar, BarChart3,
   Landmark, ShieldAlert, Calculator, ScanLine, HelpCircle, Sparkles,
+  FileSpreadsheet,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { AppContext } from "@/hooks/app-context";
@@ -129,8 +130,11 @@ export function AppSidebar({ onClose }: { onClose?: () => void }) {
           description: "Notes de frais et petits achats du quotidien.",
           descriptionEn: "Expense reports and daily small purchases." },
         { title: "Scan OCR", titleEn: "OCR Scan", url: "/ocr-scan", icon: ScanLine,
-          description: "Numérisation IA : Gemini & Mindee extraient les données.",
-          descriptionEn: "AI scanning: Gemini & Mindee extract the data." },
+          description: "Numérisation IA : Gemini extrait les données.",
+          descriptionEn: "AI scanning: Gemini extracts the data." },
+        { title: "Import fichier", titleEn: "File Import", url: "/imports", icon: FileSpreadsheet,
+          description: "Importer un relevé bancaire (CSV, Excel, TXT).",
+          descriptionEn: "Import a bank statement (CSV, Excel, TXT)." },
         { title: "Décaissements", titleEn: "Disbursements", url: "/payments?direction=outbound", icon: CreditCard,
           description: "Paiements émis vers vos fournisseurs.",
           descriptionEn: "Payments issued to your suppliers." },
