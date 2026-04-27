@@ -1633,6 +1633,174 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   }));
 
+  // ─── IMPORT FILE (CSV / XLSX / TXT) ──────────────────────────────────────
+  // Parse + auto-détection de relevés bancaires (date, libellé, montant).
+  // Retourne un aperçu structuré que le client peut importer en transactions
+  // bancaires via /api/banking/accounts/:id/import-csv.
+  const categorizeBankTx = (desc: string, amount: number): string => {
+    const d = (desc || "").toLowerCase();
+    if (amount > 0) {
+      if (d.includes("stripe") || d.includes("client") || d.includes("facture")) return "Ventes";
+      if (d.includes("salaire") || d.includes("payroll") || d.includes("virement recu") || d.includes("virement reçu")) return "Salaires/Virements";
+      if (d.includes("remboursement") || d.includes("refund")) return "Remboursement";
+      return "Entrée d'argent";
+    }
+    if (d.includes("loyer") || d.includes("rent")) return "Loyer";
+    if (d.includes("edf") || d.includes("electricite") || d.includes("électricité") || d.includes("engie") || d.includes("totalenergies") || d.includes("gaz")) return "Énergie";
+    if (d.includes("orange") || d.includes("free") || d.includes("sfr") || d.includes("bouygues") || d.includes("internet") || d.includes("téléphone") || d.includes("telephone")) return "Télécom";
+    if (d.includes("urssaf") || d.includes("impot") || d.includes("impôt") || d.includes("dgfip") || d.includes("trésor public") || d.includes("tresor public")) return "Charges sociales";
+    if (d.includes("amazon") || d.includes("fnac") || d.includes("darty") || d.includes("ldlc") || d.includes("apple") || d.includes("microsoft")) return "Bureau";
+    if (d.includes("aws") || d.includes("ovh") || d.includes("scaleway") || d.includes("digitalocean") || d.includes("vercel") || d.includes("netlify") || d.includes("cloudflare")) return "Infrastructure";
+    if (d.includes("github") || d.includes("notion") || d.includes("slack") || d.includes("zoom") || d.includes("adobe") || d.includes("figma") || d.includes("openai") || d.includes("chatgpt") || d.includes("anthropic")) return "Logiciels";
+    if (d.includes("restaurant") || d.includes("dejeuner") || d.includes("déjeuner") || d.includes("snack") || d.includes("uber eats") || d.includes("deliveroo") || d.includes("mcdo") || d.includes("burger") || d.includes("brasserie") || d.includes("café") || d.includes("cafe")) return "Restauration";
+    if (d.includes("carburant") || d.includes("essence") || d.includes("peage") || d.includes("péage") || d.includes("uber") || d.includes("taxi") || d.includes("sncf") || d.includes("blablacar") || d.includes("ratp") || d.includes("parking")) return "Transport";
+    if (d.includes("hotel") || d.includes("hôtel") || d.includes("airbnb") || d.includes("booking") || d.includes("avion") || d.includes("airfrance") || d.includes("ryanair") || d.includes("easyjet")) return "Voyage";
+    if (d.includes("assurance") || d.includes("mutuelle") || d.includes("axa") || d.includes("maif") || d.includes("macif") || d.includes("groupama")) return "Assurance";
+    if (d.includes("frais bancaire") || d.includes("commission") || d.includes("agios")) return "Frais bancaires";
+    if (d.includes("virement") || d.includes("prélèvement") || d.includes("prelevement")) return "Prélèvement";
+    return "Dépense Divers";
+  };
+
+  // Heuristique : trouve l'index de la colonne date / libellé / montant à partir des en-têtes.
+  const findColumns = (headers: string[]): { date?: number; description?: number; amount?: number; debit?: number; credit?: number } => {
+    const norm = (s: string) => (s || "").toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    const result: any = {};
+    headers.forEach((h, i) => {
+      const n = norm(h);
+      if (result.date === undefined && /(date|jour|valeur|operation)/.test(n)) result.date = i;
+      else if (result.description === undefined && /(libelle|libellé|description|operation|opération|detail|détail|motif|reference|référence|nature)/.test(n)) result.description = i;
+      else if (result.debit === undefined && /(debit|débit|sortie|retrait)/.test(n)) result.debit = i;
+      else if (result.credit === undefined && /(credit|crédit|entree|entrée|depot|dépôt|recette)/.test(n)) result.credit = i;
+      else if (result.amount === undefined && /(montant|amount|valeur|somme|total)/.test(n)) result.amount = i;
+    });
+    return result;
+  };
+
+  const parseAmount = (raw: any): number => {
+    if (raw == null || raw === "") return NaN;
+    if (typeof raw === "number") return raw;
+    let s = String(raw).trim();
+    // Format français : "1 234,56" ou "1.234,56" → "1234.56"
+    s = s.replace(/[\s\u00A0€$£]/g, "").replace(/['"]/g, "");
+    const hasComma = s.includes(","), hasDot = s.includes(".");
+    if (hasComma && hasDot) {
+      // décimal = dernier séparateur
+      const lastComma = s.lastIndexOf(","), lastDot = s.lastIndexOf(".");
+      if (lastComma > lastDot) s = s.replace(/\./g, "").replace(",", ".");
+      else s = s.replace(/,/g, "");
+    } else if (hasComma) {
+      s = s.replace(/\./g, "").replace(",", ".");
+    }
+    const n = parseFloat(s);
+    return isNaN(n) ? NaN : n;
+  };
+
+  const parseDate = (raw: any): string | null => {
+    if (raw == null || raw === "") return null;
+    // Excel serial date number
+    if (typeof raw === "number" && raw > 25569 && raw < 60000) {
+      const date = new Date(Math.round((raw - 25569) * 86400 * 1000));
+      return date.toISOString().slice(0, 10);
+    }
+    const s = String(raw).trim();
+    // ISO YYYY-MM-DD
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    // FR DD/MM/YYYY ou DD-MM-YYYY ou DD.MM.YYYY
+    m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+    if (m) {
+      const yyyy = m[3].length === 2 ? (parseInt(m[3]) > 50 ? "19" + m[3] : "20" + m[3]) : m[3];
+      return `${yyyy}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    }
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  };
+
+  const parseFileToRows = async (file: Express.Multer.File): Promise<{ headers: string[]; rows: any[][] }> => {
+    const ext = (file.originalname.split(".").pop() || "").toLowerCase();
+    const isText = ext === "csv" || ext === "tsv" || ext === "txt" || file.mimetype.startsWith("text/");
+    if (isText) {
+      const text = file.buffer.toString("utf-8");
+      const wb = XLSX.read(text, { type: "string", raw: false });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: "", blankrows: false });
+      const headers = (data[0] || []).map((c: any) => String(c ?? "").trim());
+      const rows = data.slice(1).filter(r => r.some((c: any) => c !== "" && c != null));
+      return { headers, rows };
+    }
+    // XLSX, XLS, ODS — XLSX library handles all
+    const wb = XLSX.read(file.buffer, { type: "buffer", cellDates: true });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: "", blankrows: false, raw: true });
+    const headers = (data[0] || []).map((c: any) => String(c ?? "").trim());
+    const rows = data.slice(1).filter(r => r.some((c: any) => c !== "" && c != null));
+    return { headers, rows };
+  };
+
+  app.post("/api/import/file", authenticate, upload.single("file"), ar(async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "Aucun fichier fourni" });
+      const ext = (req.file.originalname.split(".").pop() || "").toLowerCase();
+      const allowed = ["csv", "tsv", "txt", "xls", "xlsx", "xlsm", "ods"];
+      if (!allowed.includes(ext)) {
+        return res.status(400).json({ message: `Format non supporté. Formats acceptés : ${allowed.join(", ")}` });
+      }
+
+      const { headers, rows } = await parseFileToRows(req.file);
+      if (rows.length === 0) return res.status(400).json({ message: "Fichier vide" });
+
+      const cols = findColumns(headers);
+      const isBankStatement = cols.date != null && (cols.amount != null || cols.debit != null || cols.credit != null) && cols.description != null;
+
+      if (isBankStatement) {
+        const transactions: Array<{ date: string; description: string; amount: number; suggestedCategory: string; raw: any[] }> = [];
+        for (const row of rows) {
+          const dateStr = parseDate(row[cols.date!]);
+          const desc = String(row[cols.description!] ?? "").trim();
+          let amount: number;
+          if (cols.amount != null) {
+            amount = parseAmount(row[cols.amount]);
+          } else {
+            const debit = cols.debit != null ? parseAmount(row[cols.debit]) : NaN;
+            const credit = cols.credit != null ? parseAmount(row[cols.credit]) : NaN;
+            if (!isNaN(debit) && debit > 0) amount = -Math.abs(debit);
+            else if (!isNaN(credit) && credit > 0) amount = Math.abs(credit);
+            else amount = NaN;
+          }
+          if (!dateStr || !desc || isNaN(amount) || amount === 0) continue;
+          transactions.push({
+            date: dateStr,
+            description: desc,
+            amount,
+            suggestedCategory: categorizeBankTx(desc, amount),
+            raw: row.map((v: any) => v instanceof Date ? v.toISOString().slice(0, 10) : v),
+          });
+        }
+
+        return res.json({
+          kind: "bank_statement",
+          headers,
+          columnMap: cols,
+          totalRows: rows.length,
+          parsedCount: transactions.length,
+          transactions,
+        });
+      }
+
+      // Generic table — return raw preview for the user to choose what to do
+      return res.json({
+        kind: "generic",
+        headers,
+        rows: rows.slice(0, 200).map(r => r.map((v: any) => v instanceof Date ? v.toISOString().slice(0, 10) : v)),
+        totalRows: rows.length,
+      });
+    } catch (e: unknown) {
+      console.error("[Import file] error:", e);
+      const message = e instanceof Error ? e.message : "Erreur d'import";
+      res.status(500).json({ message });
+    }
+  }));
+
   // ─── OCR: CREATE DOCUMENT FROM SCAN ──────────────────────────────────────
   app.post("/api/ocr/create-document", authenticate, ar(async (req, res) => {
     try {
@@ -2397,7 +2565,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       applicationId: aid,
     }, lines.map(l => ({ ...l, entryId: 0 })));
 
-    await storage.updateBankTransaction(txId, { validated: true, accountingEntryId: entry.id });
+    // Persist netAmount/vatAmount so the transaction shows up in P&L
+    // (the P&L filter requires netAmount to be set to count it as revenue/expense).
+    const persistAmounts: any = { validated: true, accountingEntryId: entry.id };
+    if (tx.netAmount == null) persistAmounts.netAmount = tx.amount < 0 ? -netAmtCents : netAmtCents;
+    if (tx.vatAmount == null && vatAmtCents > 0) persistAmounts.vatAmount = tx.amount < 0 ? -vatAmtCents : vatAmtCents;
+    await storage.updateBankTransaction(txId, persistAmounts);
     res.json({ entry, transaction: await storage.getBankTransaction(txId) });
   }));
 
@@ -2610,11 +2783,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const apptExpense = paidAppts.filter(a => a.direction === "expense").reduce((s, a) => s + parseFloat(a.amount as any), 0);
 
     const paidInvoices = invoicesList.filter(i => i.status === "paid" && inPeriod(i.issuedDate));
+    // Fallback: if netAmount n'est pas renseigné, on retombe sur le montant brut
+    // afin que les transactions validées sans TVA apparaissent quand même en compta.
+    const txNetMajor = (tx: any) => Math.abs(tx.netAmount ?? tx.amount ?? 0) / 100;
     const revenue = paidInvoices.reduce((s, i) => s + parseFloat(i.subtotal as any || "0"), 0)
       + apptIncome
       + bankTransactions
-        .filter(tx => tx.validated && tx.amount > 0 && tx.netAmount && tx.transactedAt && inPeriod(tx.transactedAt))
-        .reduce((s, tx) => s + Math.abs(tx.netAmount ?? 0) / 100, 0);
+        .filter(tx => tx.validated && tx.amount > 0 && tx.transactedAt && inPeriod(tx.transactedAt))
+        .reduce((s, tx) => s + txNetMajor(tx), 0);
     const revenueTotal = paidInvoices.reduce((s, i) => s + parseFloat(i.total as any || "0"), 0)
       + apptIncome
       + bankTransactions
@@ -2624,8 +2800,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const expenses_ = expensesList.filter(e => inPeriod(e.date!));
     const supplierInv_ = supplierInvList.filter(i => inPeriod(i.issuedDate));
     const bankExpenses = bankTransactions
-      .filter(tx => tx.validated && tx.amount < 0 && tx.netAmount && tx.transactedAt && inPeriod(tx.transactedAt))
-      .reduce((s, tx) => s + Math.abs(tx.netAmount ?? 0) / 100, 0);
+      .filter(tx => tx.validated && tx.amount < 0 && tx.transactedAt && inPeriod(tx.transactedAt))
+      .reduce((s, tx) => s + txNetMajor(tx), 0);
     const totalExpenses = expenses_.reduce((s, e) => s + parseFloat(e.amount as any || "0"), 0)
       + supplierInv_.reduce((s, i) => s + parseFloat(i.subtotal as any || "0"), 0)
       + apptExpense

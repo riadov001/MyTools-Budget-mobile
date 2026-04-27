@@ -8,9 +8,11 @@ export type OcrProcessorResult = {
   tables?: Array<{ headers: string[]; rows: string[][] }>;
 };
 
-const SUPPORTED_TYPES = new Set(["jpg", "jpeg", "png", "webp", "heic", "pdf", "tiff"]);
+// Image/PDF types handled by Gemini Vision
+const VISION_TYPES = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif", "pdf", "tiff", "tif", "gif", "bmp"]);
+// Text-based types — read directly without OCR
+const TEXT_TYPES = new Set(["txt", "csv", "tsv", "log", "md", "json", "xml", "html", "rtf"]);
 
-// Lazy-load sharp — it may not be built in all environments
 let sharpLib: typeof import("sharp") | null = null;
 async function getSharp() {
   if (sharpLib) return sharpLib;
@@ -25,15 +27,19 @@ async function getSharp() {
 
 export async function detectFileType(buffer: Buffer, filename: string): Promise<string> {
   const ext = path.extname(filename).slice(1).toLowerCase();
-  if (SUPPORTED_TYPES.has(ext)) return ext;
+  if (VISION_TYPES.has(ext) || TEXT_TYPES.has(ext)) return ext;
   const detected = await fileTypeFromBuffer(buffer);
-  if (detected && SUPPORTED_TYPES.has(detected.ext)) return detected.ext;
-  return "pdf";
+  if (detected && (VISION_TYPES.has(detected.ext) || TEXT_TYPES.has(detected.ext))) return detected.ext;
+  // Try to detect text content (plain ASCII/UTF-8 with no binary chars)
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096)).toString("utf-8");
+  const printableRatio = (sample.match(/[\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g)?.length ?? 0) / Math.max(sample.length, 1);
+  if (printableRatio > 0.95) return "txt";
+  return "pdf"; // default to PDF (Gemini will try)
 }
 
 export async function optimizeImage(buffer: Buffer, _fileType: string): Promise<Buffer> {
   const sharp = await getSharp();
-  if (!sharp) return buffer; // fall back to raw buffer
+  if (!sharp) return buffer;
 
   const MAX_PX = 2000;
   const MAX_BYTES = 5 * 1024 * 1024;
@@ -70,8 +76,9 @@ export function detectTable(text: string): Array<{ headers: string[]; rows: stri
   for (const line of lines) {
     const tabMatch = line.split("\t").length >= 2;
     const pipeMatch = /\|/.test(line) && line.split("|").filter(s => s.trim()).length >= 2;
+    const semicolonMatch = /;/.test(line) && line.split(";").length >= 2;
     const commaMatch = /,/.test(line) && line.split(",").length >= 3;
-    const delimiter = tabMatch ? "\t" : pipeMatch ? "|" : commaMatch ? "," : "";
+    const delimiter = tabMatch ? "\t" : pipeMatch ? "|" : semicolonMatch ? ";" : commaMatch ? "," : "";
 
     if (delimiter) {
       if (lastDelimiter && delimiter !== lastDelimiter && currentRows.length > 1) {
@@ -100,6 +107,15 @@ export async function processFileForOCR(
 
   try {
     const fileType = await detectFileType(fileBuffer, filename);
+
+    // Direct text passthrough (CSV, TXT, JSON, etc.) — no OCR needed
+    if (TEXT_TYPES.has(fileType)) {
+      const rawText = fileBuffer.toString("utf-8").trim();
+      const tables = detectTable(rawText);
+      console.log(`[OCR Processor] Text passthrough done in ${Date.now() - startTime}ms (${rawText.length} chars)`);
+      return { rawText, confidence: 1.0, tables: tables.length > 0 ? tables : undefined };
+    }
+
     let processedBuffer: Buffer;
     let mimeType: string;
 
@@ -118,12 +134,16 @@ export async function processFileForOCR(
       ? "gemini-2.5-flash"
       : "gemini-2.0-flash";
 
-    const EXTRACTION_PROMPT = `Extrais TOUT le texte visible de ce document de façon exhaustive.
-Inclus: numéros, montants, dates, noms, adresses, tableaux, références.
-Conserve la structure du document (lignes, colonnes).
-Retourne uniquement le texte extrait, sans commentaires.`;
+    const EXTRACTION_PROMPT = `Tu es un OCR expert. Extrais TOUT le texte visible dans ce document, exhaustivement, en préservant la mise en page.
 
-    const timeoutMs = fileType === "pdf" ? 45000 : 20000;
+INSTRUCTIONS:
+- Inclus chaque chiffre, montant, date, nom, adresse, référence, code, IBAN, SIRET.
+- Pour les TABLEAUX (factures, relevés bancaires, listes): conserve les colonnes alignées en utilisant des tabulations entre cellules, une ligne par enregistrement. Garde l'en-tête en première ligne.
+- Pour les RELEVÉS BANCAIRES: extrais chaque transaction sur une ligne avec format: DATE<tab>LIBELLÉ<tab>DÉBIT<tab>CRÉDIT (ou DATE<tab>LIBELLÉ<tab>MONTANT si une seule colonne montant).
+- Conserve les sauts de ligne entre sections. N'invente rien. Si du texte est illisible, mets [...] à sa place.
+- Réponds UNIQUEMENT avec le texte extrait — aucun commentaire, aucun markdown, aucune analyse.`;
+
+    const timeoutMs = fileType === "pdf" ? 60000 : 25000;
 
     const textResponse = await Promise.race([
       aiInstance.models.generateContent({
@@ -132,7 +152,7 @@ Retourne uniquement le texte extrait, sans commentaires.`;
           { text: EXTRACTION_PROMPT },
           { inlineData: { mimeType, data: processedBuffer.toString("base64") } },
         ]}],
-        config: { temperature: 0, maxOutputTokens: 8192 },
+        config: { temperature: 0, maxOutputTokens: 16384 },
       }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error(`Timeout (${timeoutMs / 1000}s)`)), timeoutMs)
@@ -145,7 +165,7 @@ Retourne uniquement le texte extrait, sans commentaires.`;
       const sharp = await getSharp();
       if (fileType !== "pdf" && sharp) {
         const enhanced = await sharp(processedBuffer)
-          .modulate({ brightness: 1.2 }).normalize().png({ compressionLevel: 6 }).toBuffer();
+          .modulate({ brightness: 1.2 }).normalize().sharpen().png({ compressionLevel: 6 }).toBuffer();
         const retryResponse = await Promise.race([
           aiInstance.models.generateContent({
             model,
@@ -153,9 +173,9 @@ Retourne uniquement le texte extrait, sans commentaires.`;
               { text: EXTRACTION_PROMPT },
               { inlineData: { mimeType: "image/png", data: enhanced.toString("base64") } },
             ]}],
-            config: { temperature: 0, maxOutputTokens: 4096 },
+            config: { temperature: 0, maxOutputTokens: 8192 },
           }),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timeout retry")), 20000)),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timeout retry")), 25000)),
         ]);
         const retryText = retryResponse.text?.trim() ?? "";
         if (retryText.length >= 10) {
@@ -168,8 +188,8 @@ Retourne uniquement le texte extrait, sans commentaires.`;
 
     const tables = detectTable(rawText);
     const elapsed = Date.now() - startTime;
-    console.log(`[OCR Processor] Done in ${elapsed}ms`);
-    return { rawText, confidence: 0.8, tables: tables.length > 0 ? tables : undefined };
+    console.log(`[OCR Processor] Done in ${elapsed}ms (${rawText.length} chars, ${tables.length} tables)`);
+    return { rawText, confidence: 0.85, tables: tables.length > 0 ? tables : undefined };
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
