@@ -104,10 +104,18 @@ let aiInstance: GoogleGenAI | null = null;
 
 function getAI(): GoogleGenAI | null {
   if (aiInstance) return aiInstance;
-  const apiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey) return null;
 
-  const config: ConstructorParameters<typeof GoogleGenAI>[0] = { apiKey };
+  // Préférence : clé Google directe (plus fiable). Sinon, proxy Replit AI Integrations.
+  const directKey = process.env.GOOGLE_API_KEY;
+  if (directKey) {
+    aiInstance = new GoogleGenAI({ apiKey: directKey });
+    return aiInstance;
+  }
+
+  const integrationKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY;
+  if (!integrationKey) return null;
+
+  const config: ConstructorParameters<typeof GoogleGenAI>[0] = { apiKey: integrationKey };
   if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
     (config as Record<string, unknown>).httpOptions = {
       apiVersion: "",
@@ -118,7 +126,9 @@ function getAI(): GoogleGenAI | null {
   return aiInstance;
 }
 
-function getModel(): string {
+export function getModel(): string {
+  // Avec la clé Google directe : gemini-2.0-flash. Avec le proxy : gemini-2.5-flash.
+  if (process.env.GOOGLE_API_KEY) return "gemini-2.0-flash";
   return process.env.AI_INTEGRATIONS_GEMINI_BASE_URL ? "gemini-2.5-flash" : "gemini-2.0-flash";
 }
 

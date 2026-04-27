@@ -130,9 +130,12 @@ export async function processFileForOCR(
       console.log(`[OCR Processor] Image: ${origKB}KB → ${newKB}KB`);
     }
 
-    const model = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
-      ? "gemini-2.5-flash"
-      : "gemini-2.0-flash";
+    // Avec la clé Google directe : modèle stable. Avec proxy : 2.5-flash.
+    const model = process.env.GOOGLE_API_KEY
+      ? "gemini-2.0-flash"
+      : process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
+        ? "gemini-2.5-flash"
+        : "gemini-2.0-flash";
 
     const EXTRACTION_PROMPT = `Tu es un OCR expert. Extrais TOUT le texte visible dans ce document, exhaustivement, en préservant la mise en page.
 
